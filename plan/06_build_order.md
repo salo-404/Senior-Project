@@ -127,3 +127,20 @@ Done when: a manager can inspect metrics and approve/reject knowledge promotion 
 
 - Choose the first narrow vertical slice deliberately: one supported category, one standard urgency flow, and the manual path. Expanding category coverage before lifecycle correctness will slow the team.
 - The AI worker should be introduced only after stable case, assignment, and job contracts exist; otherwise its tool interfaces will churn.
+
+## Recent Decision Updates
+
+<!-- Updated: September 2026 decision register -->
+
+| Date | Decision update |
+| --- | --- |
+| September 2026 | MVP categories are HVAC/Air Conditioning and home appliances for indoor spaces; plumbing, electrical, and generators are future directions. |
+| September 2026 | NestJS-only technician ranking uses the confirmed normal and emergency weights. |
+| September 2026 | Qwen is the current shared-agent model plan; Ollama versus online API, plus embeddings, remain implementation decisions; no MVP fine-tuning. |
+| September 2026 | Dispatchers and managers share `staff_profiles`; their role difference remains in `user_roles`. |
+| September 2026 | Emergency form requests bypass AI and notify dispatch immediately; hotline display creates no case. |
+| September 2026 | Dispatchers provide technician-case feedback after reviewing job reports; technicians record AI helpfulness in their own reports. |
+| September 2026 | Customers choose manual form entry or AI-assisted form filling and always submit themselves; dispatchers gain PDF export and job setup flow. |
+| September 2026 | The Orchestrator is the central chat for all roles; it routes to the two agents or controlled manager analytics tools. |
+| September 2026 | MVP notifications poll every 30 seconds; WebSockets and mobile push are future work. |
+| September 2026 | Required operational, audit, notification, conversation, and pgvector indexes are now specified. |

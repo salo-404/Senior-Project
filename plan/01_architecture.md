@@ -16,7 +16,8 @@ NestJS modular monolith <----> PostgreSQL with pgvector
                                   Python AI Worker
                                    |             |
                                    v             v
-                              Qwen via Ollama   Embedding model via Ollama
+<!-- Updated: LLM model strategy -->
+                         Qwen via Ollama or online API   Optional local embedding model via Ollama
 ```
 
 The web application communicates only with NestJS. The Python worker receives a serialized job through BullMQ and returns a validated result to a backend-owned completion path. The worker has no PostgreSQL credentials and no object-storage credential that bypasses NestJS authorization.
@@ -31,7 +32,9 @@ The web application communicates only with NestJS. The Python worker receives a 
 | PostgreSQL + pgvector | Transactional data, audit data, conversation metadata, knowledge chunks and embeddings |
 | Redis + BullMQ | Durable asynchronous AI job queue, retry state, delayed jobs |
 | Python AI Worker | Qwen calls, image analysis, retrieval orchestration, structured output validation before callback/result storage |
-| Ollama with Qwen and embedding model | Local LLM and embedding inference; an approved online Qwen API can replace the inference endpoint later without changing domain contracts |
+<!-- Updated: LLM model strategy -->
+| Qwen via Ollama or online API | **Current plan - subject to change during implementation phase.** Both agents use the same Qwen model; local Ollama or an online Qwen API will be selected after hardware, cost, and quality testing. |
+| Local pretrained embedding model via Ollama | Used for embeddings if needed; selection is to be confirmed during implementation. No fine-tuning is planned for the MVP. |
 | Object storage | Original customer images and approved document assets, accessed through backend-issued authorized operations |
 
 ## NestJS Modules

@@ -6,18 +6,27 @@ Use one Next.js application with authenticated role-aware routes and shared API 
 
 ## Customer Pages
 
+<!-- Updated: UI/UX flow decisions -->
+
+Customer request entry offers two deliberate paths: fill the form manually, or open AI chat and press **Let AI Fill Form** after describing the issue. AI fills editable standard form fields; the customer always reviews, edits if needed, and submits. AI never submits a request for the customer.
+
 | Page | Main components | API integration |
 | --- | --- | --- |
 | Sign in | Login form, validation, session handling | `POST /auth/login`, `GET /me` |
 | Customer dashboard | Case status list, quick report entry, notifications | `GET /cases`, `GET /notifications` |
 | New manual request | Equipment selector, address selector, symptom/category fields, urgency/safety inputs, image uploader | `GET/POST /equipment`, `POST /files/uploads`, `POST /requests` |
 | AI-assisted report | Chat thread, attachment picker, draft preview, edit/review/submit controls, AI run status | `POST /ai/conversations`, `POST /ai/conversations/:id/messages`, `GET /ai/runs/:id` |
+| Emergency request | Minimal description and location form, immediate dispatcher notice, hotline number display | `POST /requests/emergency` for the form; the hotline creates no backend request |
 | Case detail | Status timeline, evidence, dispatcher follow-up, assignment/job summary as permitted | `GET /cases/:id`, `PATCH /cases/:id` |
 | Completed case/review | Verified outcome summary and review form | `GET /jobs/:caseId`, `POST /cases/:id/reviews` |
 
 The customer sees a clear distinction between their description, AI-suggested fields, dispatcher communication, and verified technician outcome.
 
 ## Dispatcher Pages
+
+<!-- Updated: UI/UX flow decisions -->
+
+Dispatchers review each case in a structured page and can export it as a backend-generated PDF. Available review actions are approve, reject, and request more information. After approval, the dispatcher creates the technician job by adding notes, selecting an eligible technician, and setting a schedule.
 
 | Page | Main components | API integration |
 | --- | --- | --- |
@@ -30,6 +39,10 @@ The customer sees a clear distinction between their description, AI-suggested fi
 The assignment screen must make the human confirmation action separate from the recommendation. The dispatcher can inspect scores and choose a different eligible technician.
 
 ## Technician Pages
+
+<!-- Updated: UI/UX flow decisions -->
+
+The technician assistant is limited to case summaries, possible causes, required tools, and on-site findings reported by the technician. It uses only authorized job information and RAG knowledge, supports technician judgment, and never makes decisions.
 
 | Page | Main components | API integration |
 | --- | --- | --- |

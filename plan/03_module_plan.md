@@ -30,6 +30,10 @@ Modules 1 and 2 below are intentionally self-contained, testable milestones. The
 
 **Purpose:** deliver the manual customer-to-dispatcher case workflow with no AI, queue, or technician assignment required.
 
+<!-- Updated: maintenance categories -->
+
+The MVP supports HVAC/Air Conditioning and home appliances (fridges, washing machines, and dishwashers) in indoor spaces: homes, offices, universities, and schools. Plumbing, electrical, and generators remain future directions outside MVP scope.
+
 **Entities:** `customer_addresses`, `equipment_types`, `equipment`, `maintenance_requests`, `maintenance_cases`, `case_status_history`, `attachments`.
 
 | Endpoint | Role | Purpose |
@@ -39,6 +43,7 @@ Modules 1 and 2 below are intentionally self-contained, testable milestones. The
 | `POST /equipment` | Customer | Register owned equipment |
 | `GET /equipment` | Customer | List own equipment |
 | `POST /requests` | Customer | Submit a manual maintenance request |
+| `POST /requests/emergency` | Customer | Submit an emergency form with description and location only; bypass AI and notify dispatch immediately |
 | `GET /cases` | Customer, Dispatcher, Manager | List cases within role scope |
 | `GET /cases/:id` | Authorized roles | Read one case and status history |
 | `PATCH /cases/:id` | Customer before submission; Dispatcher in review | Update permitted case fields |
@@ -47,6 +52,10 @@ Modules 1 and 2 below are intentionally self-contained, testable milestones. The
 **Dependencies:** auth/identity/audit. `files` validates ownership before `cases` associates attachment IDs. `cases` owns lifecycle validation and uses audit/status history transactionally.
 
 **Testable outcome:** a customer can create equipment, upload metadata-backed evidence, submit a manual case, and view it; a dispatcher can review it, request clarification, approve, or cancel it. Illegal state changes and cross-customer access fail.
+
+<!-- Updated: emergency request path -->
+
+The emergency form produces a request with `source = EMERGENCY_FORM` and `contact_preference = FORM`; it does not enqueue AI work. The hotline option is frontend-only and creates no request or case.
 
 ## 3. Dispatch and Notifications
 
@@ -65,6 +74,14 @@ Modules 1 and 2 below are intentionally self-contained, testable milestones. The
 
 **Dependencies:** auth/identity/audit, cases. Ranking takes case category/urgency and technician data from the owning identity/dispatch service. Assignment requires `APPROVED` state and records its ranking snapshot.
 
+<!-- Updated: technician ranking -->
+
+NestJS alone computes the normal weights of 35% skill, 25% experience, 25% availability, 10% rate, and 5% feedback; emergency weights are 30%, 20%, 35%, 10%, and 5% respectively. AI may only present the stored factors and explanation.
+
+<!-- Updated: notifications strategy -->
+
+MVP notification delivery uses frontend polling every 30 seconds against `GET /notifications`; no WebSocket is included in the MVP. WebSockets for real-time delivery and mobile push notifications are future work.
+
 ## 4. Jobs and Reviews
 
 **Purpose:** enable the technician execution workflow and collect customer feedback.
@@ -79,6 +96,10 @@ Modules 1 and 2 below are intentionally self-contained, testable milestones. The
 | `POST /cases/:id/reviews` | Case customer | Submit one completion review |
 
 **Dependencies:** cases, dispatch, files, audit, notifications. Completion must atomically write the report, status transition/history, and notifications.
+
+<!-- Updated: technician case feedback -->
+
+The job report includes the technician's `ai_analysis_was_helpful` response. After review, a dispatcher owns `technician_case_feedback`, evaluates AI prediction accuracy, and approves confirmed outcomes for knowledge promotion when appropriate.
 
 ## 5. AI Gateway
 

@@ -4,7 +4,8 @@
 
 maintAIn is an AI-powered maintenance management platform. It turns a customer report into a structured maintenance case while preserving human authority over all operational decisions. It supports the full workflow from a report through dispatch, job execution, technician verification, and operational insight.
 
-The initial service scope is AC/HVAC, refrigerators, and selected electrical problems. Plumbing is out of scope.
+<!-- Updated: maintenance categories -->
+The MVP service scope is HVAC/Air Conditioning and home appliances: fridges, washing machines, and dishwashers. The focus is indoor spaces: homes, offices, universities, and schools. Plumbing, electrical, and generators are future directions only and are not part of the MVP.
 
 ## Roles
 
@@ -61,6 +62,15 @@ Key transition ownership:
 | `IN_PROGRESS` to `COMPLETED` | Assigned technician | Verified outcome and completion details required |
 | Eligible pre-completion state to `CANCELLED` | Customer or dispatcher per policy | Cancellation reason and actor are recorded |
 
+## Emergency Request Path
+
+<!-- Updated: emergency request path -->
+
+Emergency requests have two customer options:
+
+1. **Emergency form:** the customer provides only a description and location. NestJS creates the emergency request, sends it immediately to the dispatcher queue, and creates an immediate dispatcher notification. This path does not trigger AI analysis.
+2. **Hotline:** the interface displays the hotline number. This is informational only: it has no backend workflow and creates no maintenance case.
+
 ## Core Principles
 
 1. The NestJS modular monolith owns authentication, RBAC, business rules, lifecycle transitions, technician ranking, and all critical decisions.
@@ -73,6 +83,8 @@ Key transition ownership:
 
 ## Ranking Rules
 
+<!-- Updated: technician ranking -->
+
 The backend produces a normalized, explainable score from eligible technicians.
 
 | Situation | Skill | Experience | Availability | Rate | Customer feedback |
@@ -82,9 +94,25 @@ The backend produces a normalized, explainable score from eligible technicians.
 
 Eligibility checks happen before scoring: active status, required skill coverage, availability, and any safety restriction. The dispatcher sees the candidate list, individual factors, and the final recommendation but may choose any permitted eligible technician.
 
+NestJS calculates these weights and scores. AI may explain a ranking but never calculates one.
+
+## LLM Model Strategy
+
+<!-- Updated: LLM model strategy -->
+
+**Current plan - subject to change during implementation phase.** Both specialized agents use the same Qwen model. The implementation will choose local inference through Ollama or an online Qwen API after hardware, cost, and quality testing. The embedding model is planned as a local pretrained model through Ollama if embeddings are needed; that choice will also be confirmed during implementation.
+
+No fine-tuning is required for the MVP. RAG supplies domain knowledge. Fine-tuning may be considered later only if evaluation shows it materially improves accuracy or domain performance.
+
+## Central AI Chat
+
+<!-- Updated: AI architecture clarification -->
+
+All roles use one central chat interface operated by the Orchestrator. For each message, it either answers a simple permitted question directly, routes customer work to the Maintenance Intelligence Agent, or routes dispatcher work to the Operations Intelligence Agent. Managers use the Orchestrator with controlled backend analytics tools only; there is no third agent.
+
 ## Known Planning Risks
 
 - Define a single urgency vocabulary and the exact condition that makes a request an emergency before ranking is implemented.
 - Define cancellation rights by state, including whether a customer can cancel after assignment.
-- "Selected electrical problems" needs an approved category list so prompts, forms, skills, and RAG ingestion share the same boundary.
+- The MVP category list needs stable HVAC and home-appliance definitions so prompts, forms, skills, and RAG ingestion share the same boundary.
 - Knowledge promotion needs a manager/dispatcher approval policy and a de-identification rule before verified case text is indexed.

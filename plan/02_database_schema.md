@@ -12,7 +12,8 @@ PostgreSQL is the single system of record. Prisma migrations define all schema c
 | `customer_profiles` | `user_id`, `display_name`, `phone` | Owns addresses, equipment, requests |
 | `customer_addresses` | `customer_id`, address fields, `is_default` | Used by cases/jobs |
 | `technician_profiles` | `user_id`, `display_name`, `years_experience`, `hourly_rate`, `is_active` | Skills, availability, teams, assignments |
-| `dispatcher_profiles` | `user_id`, `display_name` | Creates review/assignment actions |
+<!-- Updated: staff profiles -->
+| `staff_profiles` | `user_id`, `display_name`, `phone` | Shared profile for dispatchers and managers; role distinction is owned by `user_roles`, with no separate dispatcher or manager profile table |
 | `teams` | `id`, `name`, `is_active` | Many technicians through `technician_teams` |
 | `technician_teams` | `technician_id`, `team_id` | Unique pair |
 | `skills` | `id`, `code`, `name`, `service_scope` | Many technicians and equipment/case requirements |
@@ -25,17 +26,20 @@ PostgreSQL is the single system of record. Prisma migrations define all schema c
 | --- | --- | --- |
 | `equipment_types` | `id`, `category`, `name`, `is_active` | Referenced by equipment |
 | `equipment` | `id`, `customer_id`, `equipment_type_id`, `brand`, `model`, `serial_number`, `location_note` | Optional link from request/case |
-| `maintenance_requests` | `id`, `customer_id`, `source` (`MANUAL`, `AI_ASSISTED`), raw report fields, `submitted_at` | One accepted request creates one case; has attachments |
+<!-- Updated: emergency request path -->
+| `maintenance_requests` | `id`, `customer_profile_id`, `source` (`MANUAL`, `AI_ASSISTED`, `EMERGENCY_FORM`), `contact_preference VARCHAR` (`form` or `hotline`, emergency only), `status`, `priority`, raw report fields, `submitted_at` | One accepted request creates one case; emergency form requests require only description and location, bypass AI, and are immediately surfaced to dispatch |
 | `maintenance_cases` | `id`, `request_id`, `customer_id`, `address_id`, `equipment_id`, `category`, `urgency`, `safety_flags`, `status`, `summary`, `created_at` | Central operational record |
 | `case_status_history` | `case_id`, `from_status`, `to_status`, `actor_user_id`, `reason`, `created_at` | Append-only history |
 | `attachments` | `id`, `owner_user_id`, `request_id`, `case_id`, `object_key`, `media_type`, `size_bytes`, `scan_status` | Metadata only; object lives in storage |
-| `assignments` | `id`, `case_id`, `technician_id`, `assigned_by_user_id`, `status`, `rank_snapshot`, `assigned_at` | Preserve recommendation/rationale snapshot |
-| `job_reports` | `id`, `assignment_id`, `technician_id`, `finding`, `work_performed`, `verified_outcome`, `completion_evidence`, `completed_at` | One authoritative completion report per completed assignment |
+| `assignments` | `id`, `case_id`, `technician_profile_id`, `assigned_by_user_id`, `status`, `rank_snapshot`, `assigned_at` | Preserve recommendation/rationale snapshot |
+<!-- Updated: technician case feedback -->
+| `job_reports` | `id`, `assignment_id`, `technician_id`, `finding`, `work_performed`, `verified_outcome`, `completion_evidence`, `ai_analysis_was_helpful`, `completed_at` | One authoritative completion report per completed assignment; the technician records their own AI-helpfulness perspective |
 | `reviews` | `id`, `case_id`, `customer_id`, `rating`, `comment`, `submitted_at` | One review per eligible case/customer |
-| `notifications` | `id`, `user_id`, `type`, `payload`, `read_at` | Created by domain events |
-| `audit_logs` | `id`, `actor_user_id`, `action`, `entity_type`, `entity_id`, `before_json`, `after_json`, `request_id`, `created_at` | Append-only critical-action trail |
+| `notifications` | `id`, `user_id`, `type`, `payload`, `is_read`, `read_at` | Created by domain events |
+| `audit_logs` | `id`, `user_id`, `action`, `entity_type`, `entity_id`, `before_json`, `after_json`, `request_id`, `created_at` | Append-only critical-action trail |
 
-Optional tables remain out of the first migration unless a concrete workflow needs them: `maintenance_symptoms`, `maintenance_causes`, `case_evidence`, `job_parts`, `service_prices`, `job_costs`, and `technician_case_feedback`.
+<!-- Updated: technician case feedback -->
+Optional tables remain out of the first migration unless a concrete workflow needs them: `maintenance_symptoms`, `maintenance_causes`, `case_evidence`, `job_parts`, `service_prices`, `job_costs`, and `technician_case_feedback`. When activated, `technician_case_feedback` is completed by the dispatcher after reviewing a completed job report; it records whether the AI prediction was accurate and whether the verified outcome is approved for RAG knowledge promotion.
 
 ## AI and Knowledge Domain
 
@@ -63,6 +67,19 @@ Optional tables remain out of the first migration unless a concrete workflow nee
 ## pgvector Note
 
 Enable the PostgreSQL `vector` extension in a Prisma migration. Store one embedding vector per `knowledge_chunks` row using the dimension required by the selected local embedding model. Add an approximate-nearest-neighbor vector index only after that model and dimension are fixed. Keep metadata columns for source ID, category, equipment type, safety level, and approval status so retrieval can filter before similarity ranking.
+
+## Required Indexes
+
+<!-- Updated: database indexes -->
+
+| Table | Index | Purpose |
+| --- | --- | --- |
+| `maintenance_requests` | `customer_profile_id`, `status`, `priority` | Customer history and dispatcher queue filtering |
+| `assignments` | `technician_profile_id`, `status` | Technician workload and active-assignment lookups |
+| `ai_messages` | `conversation_id` | Ordered conversation retrieval |
+| `audit_logs` | `user_id`; composite `(entity_type, entity_id)` | Actor and entity audit trails |
+| `notifications` | composite `(user_id, is_read)` | Unread notification polling |
+| `knowledge_chunks` | `embedding` using pgvector `ivfflat` cosine index | Filtered similarity retrieval after the embedding dimension is fixed |
 
 ## Schema Risks
 

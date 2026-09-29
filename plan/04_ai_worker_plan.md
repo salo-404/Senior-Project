@@ -16,10 +16,15 @@ The Python worker provides intelligence only. NestJS owns identity, authorizatio
 | Manager orchestration | Uses controlled analytics tools; no separate agent or RAG corpus |
 | RAG service | Retrieval filtering, similarity query through backend tool, context/citation preparation |
 | Tool client | Calls only declared NestJS tool endpoints using scoped worker credentials |
-| Provider adapters | Qwen inference and local embedding requests through Ollama or approved Qwen API |
+<!-- Updated: LLM model strategy -->
+| Provider adapters | **Current plan - subject to change during implementation phase.** The same Qwen model serves both agents through Ollama or an online API, selected after hardware, cost, and quality testing; a local pretrained Ollama embedding model is used if needed. No MVP fine-tuning is planned. |
 | Validator | Pydantic schema, enum, reference, safety, citation, and policy checks |
 
 ## Orchestrator Logic
+
+<!-- Updated: AI architecture clarification -->
+
+The Orchestrator is the single central chat interface for all roles. It answers simple permitted questions directly or routes work to the Maintenance Intelligence Agent or Operations Intelligence Agent. Managers use only the Orchestrator and controlled backend analytics tools; there is no third manager agent. RAG supplies domain knowledge in place of MVP fine-tuning.
 
 1. Load the job contract, user role, conversation scope, permitted capabilities, and case/job context supplied by NestJS.
 2. Reject an invalid role/context combination before sending anything to a model. A technician conversation must have an active permitted assignment; a customer conversation must be limited to their records.
@@ -36,7 +41,8 @@ The Python worker provides intelligence only. NestJS owns identity, authorizatio
 - Customer message history and current message.
 - Authorized attachment references, not unrestricted object-storage paths.
 - Customer-supplied equipment context and case draft fields.
-- Permitted maintenance scope: AC/HVAC, refrigerators, selected electrical issues.
+<!-- Updated: maintenance categories -->
+- Permitted MVP maintenance scope: HVAC/Air Conditioning and home appliances (fridges, washing machines, and dishwashers) in indoor spaces. Plumbing, electrical, and generators are future directions and must not be treated as supported MVP categories.
 
 ### Work
 
