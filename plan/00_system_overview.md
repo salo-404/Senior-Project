@@ -16,6 +16,9 @@ The MVP service scope is HVAC/Air Conditioning and home appliances: fridges, was
 | Technician | Accept assigned work, execute it, report findings and outcome | Verified job outcome is the authoritative service record |
 | Manager | Monitor operations and ask approved analytics questions | Reviews metrics and verified operational data |
 
+<!-- Updated: technician model -->
+Technician model: the primary model is company-contracted technicians registered in the system with full profiles, skills, teams, and availability. For super urgent emergency cases only, when all internal technicians are occupied or unavailable, the dispatcher may record an external technician by name and phone only. External engagement is a closed, one-off transaction handled directly by the dispatcher; the external technician has no system profile and cannot log in. A full freelancer marketplace, external technician portal, and self-registration for verified contractors are future directions.
+
 ## Two Request Paths
 
 ### Manual path
@@ -68,7 +71,8 @@ Key transition ownership:
 
 Emergency requests have two customer options:
 
-1. **Emergency form:** the customer provides only a description and location. NestJS creates the emergency request, sends it immediately to the dispatcher queue, and creates an immediate dispatcher notification. This path does not trigger AI analysis.
+<!-- Updated: emergency intake form -->
+1. **Emergency form:** only when the customer selects `EMERGENCY`, the customer selects already-registered equipment, confirms or changes the pre-filled default address, enters a short description, chooses `FORM` or `HOTLINE` contact preference, and may attach a photo. The backend auto-generates the title, sends the request immediately to the dispatcher queue, and creates an immediate dispatcher notification. This path does not trigger AI analysis. Customers with an unpaid balance cannot use this form.
 2. **Hotline:** the interface displays the hotline number. This is informational only: it has no backend workflow and creates no maintenance case.
 
 ## Core Principles
@@ -89,12 +93,20 @@ The backend produces a normalized, explainable score from eligible technicians.
 
 | Situation | Skill | Experience | Availability | Rate | Customer feedback |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Normal | 35% | 25% | 25% | 10% | 5% |
-| Emergency | 30% | 20% | 35% | 10% | 5% |
+| Normal | 35% | 25% | 30% | 10% | 5% |
+| Emergency | 30% | 20% | 40% | 10% | 5% |
 
 Eligibility checks happen before scoring: active status, required skill coverage, availability, and any safety restriction. The dispatcher sees the candidate list, individual factors, and the final recommendation but may choose any permitted eligible technician.
 
 NestJS calculates these weights and scores. AI may explain a ranking but never calculates one.
+
+<!-- Updated: location and distance -->
+Distance factor is not part of the MVP ranking algorithm. Dispatcher manually considers location when selecting technicians. GPS tracking planned for a future phase.
+
+Future directions include real-time technician GPS location tracking, a dispatcher map view, distance-based ranking, and route optimization for technicians. These require mobile GPS integration and are planned for a future phase.
+
+<!-- Updated: payment model -->
+Payment is business-facing: the system calculates and displays costs, but has no payment gateway or real-money transaction. After completion, the customer sees the full cost breakdown and payment remains pending until the dispatcher confirms it manually. A customer with an unpaid balance cannot submit any new request, including emergencies, until the account is unlocked after confirmation.
 
 ## LLM Model Strategy
 

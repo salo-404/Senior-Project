@@ -16,11 +16,30 @@ Customer request entry offers two deliberate paths: fill the form manually, or o
 | Customer dashboard | Case status list, quick report entry, notifications | `GET /cases`, `GET /notifications` |
 | New manual request | Equipment selector, address selector, symptom/category fields, urgency/safety inputs, image uploader | `GET/POST /equipment`, `POST /files/uploads`, `POST /requests` |
 | AI-assisted report | Chat thread, attachment picker, draft preview, edit/review/submit controls, AI run status | `POST /ai/conversations`, `POST /ai/conversations/:id/messages`, `GET /ai/runs/:id` |
-| Emergency request | Minimal description and location form, immediate dispatcher notice, hotline number display | `POST /requests/emergency` for the form; the hotline creates no backend request |
+<!-- Updated: emergency intake form -->
+| Emergency request | Simplified EMERGENCY-only form with registered equipment picker, pre-filled/changeable default address, short description, contact preference, optional photo, auto-generated title, immediate dispatcher notice, hotline number display | `POST /requests/emergency` for the form; the hotline creates no backend request |
 | Case detail | Status timeline, evidence, dispatcher follow-up, assignment/job summary as permitted | `GET /cases/:id`, `PATCH /cases/:id` |
 | Completed case/review | Verified outcome summary and review form | `GET /jobs/:caseId`, `POST /cases/:id/reviews` |
 
 The customer sees a clear distinction between their description, AI-suggested fields, dispatcher communication, and verified technician outcome.
+
+<!-- Updated: payment model -->
+The simplified Emergency form is triggered only when the customer selects `EMERGENCY`. It uses equipment already registered to the customer, pre-fills the default address while allowing changes, accepts a short free-text description, offers `FORM` or `HOTLINE` as `contact_preference`, and allows an optional photo. The backend generates a title such as `Emergency - [equipment type]`; the customer does not enter a title. Customers with `has_unpaid_balance = true` are blocked from submitting any new request, including emergencies. Normal and `URGENT` requests continue using the normal detailed form; `URGENT` is only sorted higher in the dispatcher queue.
+
+## Emergency Intake Form
+
+<!-- Updated: emergency intake form -->
+
+When priority is `EMERGENCY`, show a separate simplified form containing:
+
+- Quick equipment picker limited to the customer's already-registered equipment; there is no add-new-equipment flow here.
+- Address pre-filled from the customer's default address and changeable.
+- One short free-text description field.
+- `contact_preference`: `FORM` or `HOTLINE`.
+- Optional photo attachment.
+- Backend-generated title, for example `Emergency - [equipment type]`.
+
+The unpaid-balance block still applies with no emergency exception. Normal non-emergency requests, including `URGENT`, keep the detailed request form.
 
 ## Dispatcher Pages
 
@@ -33,8 +52,13 @@ Dispatchers review each case in a structured page and can export it as a backend
 | Dispatcher queue | Filters by status, urgency, category; compact case rows | `GET /cases` |
 | Case review | Full report/evidence, history timeline, follow-up panel, approve/cancel actions | `GET /cases/:id`, `POST /cases/:id/review` |
 | Assignment workspace | Candidate table, eligibility messages, score-factor breakdown, selected technician confirmation | `GET /cases/:id/technician-ranking`, `POST /cases/:id/assignments` |
+<!-- Updated: payment model -->
+| Payment confirmation | Job report with full cost breakdown, **Confirm Payment** button, payment method selector (`Cash`, `Transfer`, `Other`) | Job/cost and payment confirmation endpoints |
 | Operations chat | Case-aware chat, AI ranking explanation, run state | AI conversation/run endpoints |
 | Technician directory | Skill, team, availability, feedback summaries | technician/availability endpoints defined by dispatch module |
+
+<!-- Updated: payment model -->
+Dispatcher payment workflow: after job completion, show the work report, base/labor/parts breakdown, total amount due, payment status, and manual confirmation controls. External-technician labor cost is entered manually by the dispatcher.
 
 The assignment screen must make the human confirmation action separate from the recommendation. The dispatcher can inspect scores and choose a different eligible technician.
 
@@ -58,9 +82,14 @@ The technician cannot change another technician's assignment, alter the case his
 | Page | Main components | API integration |
 | --- | --- | --- |
 | Operations dashboard | Case volume/status, response and completion metrics, technician workload, AI reliability metrics | `GET /analytics/operations`, `GET /analytics/technicians`, `GET /analytics/ai` |
+<!-- Updated: payment model -->
+| Payments dashboard | Outstanding payments list, total unpaid amount, customer accounts with unpaid balance | Manager-scoped payment analytics endpoint |
 | Manager chat | Analytics question input, grounded result display, source/time range labels | AI conversation/run endpoints and manager tools |
 | Knowledge governance | Source list, document state, case-promotion review, approval controls | knowledge endpoints |
 | Audit view | Filterable critical-action history | `GET /audit-logs` |
+
+<!-- Updated: payment model -->
+Customer view after job completion includes the work performed summary, cost breakdown for base plus labor plus parts, total amount due, payment status (`Pending` or `Confirmed`), and a contact-company-for-payment-instructions action.
 
 ## Shared Components
 

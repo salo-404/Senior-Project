@@ -104,6 +104,8 @@ NestJS controls status transitions, technician ranking, cost calculation, audit-
 | `ai_feedback_rating` | `HELPFUL`, `NOT_HELPFUL` |
 | `knowledge_source_type` | `VERIFIED_CASE`, `MANUFACTURER_MANUAL`, `TROUBLESHOOTING_GUIDE`, `SAFETY_DOCUMENTATION` |
 | `processing_status` | `PENDING`, `PROCESSING`, `COMPLETED`, `FAILED` |
+| `job_payment_status` | `PENDING`, `CONFIRMED`, `WAIVED` |
+| `payment_method_type` | `CASH`, `TRANSFER`, `OTHER` |
 
 ## 4. Domains
 
@@ -152,12 +154,15 @@ Tables: `customer_profiles`, `customer_addresses`, `technician_profiles`, `staff
 
 #### `customer_profiles`
 
+<!-- Updated: payment model -->
 ```text
 id              UUID PK
 user_id         UUID FK -> users.id UNIQUE
 first_name      VARCHAR
 last_name       VARCHAR
 phone           VARCHAR NULLABLE
+has_unpaid_balance BOOLEAN DEFAULT false
+unpaid_amount   DECIMAL(10,2) DEFAULT 0.00
 created_at      TIMESTAMPTZ
 updated_at      TIMESTAMPTZ
 ```
@@ -294,6 +299,7 @@ description     TEXT NULLABLE
 created_at      TIMESTAMPTZ
 ```
 
+<!-- Updated: payment model -->
 Examples: Split AC, Central AC, and Ventilation Unit are `HVAC`; Refrigerator, Washing Machine, and Dishwasher are `HOME_APPLIANCES`.
 
 #### `equipment`
@@ -446,7 +452,7 @@ Tables: `assignments`, `job_reports`, `job_parts`, `service_prices`, `job_costs`
 ```text
 id                    UUID PK
 request_id            UUID FK -> maintenance_requests.id
-technician_profile_id UUID FK -> technician_profiles.id
+technician_profile_id UUID FK -> technician_profiles.id NULLABLE
 assigned_by           UUID FK -> users.id
 status                assignment_status DEFAULT PENDING
 scheduled_date        DATE
@@ -455,11 +461,17 @@ ai_recommended        BOOLEAN DEFAULT false
 ranking_score         DECIMAL(5,2) NULLABLE
 rejection_reason      TEXT NULLABLE
 dispatcher_notes      TEXT NULLABLE
+is_external           BOOLEAN DEFAULT false
+external_name         VARCHAR NULLABLE
+external_phone        VARCHAR NULLABLE
 created_at            TIMESTAMPTZ
 updated_at            TIMESTAMPTZ
 ```
 
 `ai_recommended` is true when the dispatcher chose the top-ranked technician. `rejection_reason` is used when a technician rejects.
+
+<!-- Updated: technician model -->
+Assignment rules: normal jobs use registered company technicians only. For emergency cases, when all available internal technicians are occupied or unavailable, the dispatcher may record an external technician by name and phone only. External technicians have no system profile, cannot log in, and the assignment is for tracking only. When `is_external = false`, `technician_profile_id` is required. When `is_external = true`, `external_name` and `external_phone` are required and `technician_profile_id` must be null.
 
 #### `job_reports`
 
@@ -515,6 +527,10 @@ labor_cost       DECIMAL(10,2)
 total_cost       DECIMAL(10,2)
 currency         VARCHAR(3) DEFAULT 'USD'
 notes            TEXT NULLABLE
+payment_status   job_payment_status DEFAULT PENDING
+payment_method   payment_method_type NULLABLE
+payment_confirmed_by UUID FK -> users.id NULLABLE
+payment_confirmed_at TIMESTAMPTZ NULLABLE
 created_at       TIMESTAMPTZ
 ```
 
@@ -527,6 +543,9 @@ labor_cost = hourly_rate x (job_duration_minutes / 60)
 parts_cost = SUM(unit_cost x quantity)
 total_cost = base_price + parts_cost + labor_cost
 ```
+
+<!-- Updated: payment model -->
+Payment is business-facing: there is no payment gateway or real-money transaction inside the app. For internal technicians, `labor_cost = hourly_rate x (job_duration_minutes / 60)`. When the assignment is external, the dispatcher enters `labor_cost` manually because no internal hourly rate exists. After a job is completed, the backend calculates the cost, the customer sees the full breakdown, and `payment_status` starts as `PENDING`. The dispatcher manually confirms payment with `CASH`, `TRANSFER`, or `OTHER`, which sets `payment_status = CONFIRMED`, clears the customer's unpaid balance, and unlocks the customer account. A waived payment uses `WAIVED`.
 
 #### `technician_case_feedback`
 
@@ -543,7 +562,11 @@ created_at             TIMESTAMPTZ
 
 `reviewed_by` is the dispatcher. `approved_for_knowledge` is the dispatcher's gate for RAG promotion.
 
-Rules: only dispatchers create assignments; AI recommends but never assigns. A request has at most one active assignment in `PENDING`, `ACCEPTED`, or `IN_PROGRESS`. A rejection marks the assignment `REJECTED` and returns the request to `APPROVED`. Ranking scores are saved at assignment time and are not recalculated historically. The backend calculates all costs. Each assignment has one job report and each report has one cost record.
+<!-- Updated: technician model -->
+Rules: only dispatchers create assignments; AI recommends but never assigns. A request has at most one active assignment in `PENDING`, `ACCEPTED`, or `IN_PROGRESS`. A rejection marks the assignment `REJECTED` and returns the request to `APPROVED`. Ranking scores are saved at assignment time and are not recalculated historically. External assignments do not create reviews, commission charges, or technician-ledger entries. The `reviews.technician_profile_id` remains required; the review step is skipped for external jobs. For external assignments, the dispatcher fills in `job_reports` as a brief summary from a phone call after completion, rather than a technician-submitted structured report. The whole commission, payout, and tier system applies only to registered technicians with a `technician_profile_id`. Each assignment has one job report and each report has one cost record.
+
+<!-- Updated: payment model -->
+Payment rules: a customer with `has_unpaid_balance = true` cannot submit any new request, including an emergency request. There is no emergency bypass. When a completed job has a pending amount due, the backend sets `customer_profiles.has_unpaid_balance = true` and `customer_profiles.unpaid_amount` to the outstanding total. The manager dashboard reports outstanding payments, total unpaid amount, and affected customer accounts. When payment is confirmed, `job_costs.payment_status` becomes `CONFIRMED`, `customer_profiles.has_unpaid_balance` becomes `false`, and `customer_profiles.unpaid_amount` becomes `0.00`.
 
 #### Feedback sources
 
@@ -813,9 +836,14 @@ NestJS computes ranking; AI never computes it. Store the result in `assignments.
 | --- | ---: | ---: | --- |
 | Skill | 35% | 30% | `technician_skills` proficiency and category match |
 | Experience | 25% | 20% | `technician_profiles.experience_years`, `technician_skills.years_of_experience` |
-| Availability | 25% | 35% | `technician_availability`, `technician_profiles.is_available`, active assignment count |
+| Availability | 30% | 40% | `technician_availability`, `technician_profiles.is_available`, active assignment count |
 | Rate | 10% | 10% | `technician_profiles.hourly_rate`; lower rate yields higher score |
 | Feedback | 5% | 5% | `technician_profiles.rating` |
+
+<!-- Updated: location and distance -->
+Distance factor is not part of the MVP ranking algorithm. Dispatcher manually considers location when selecting technicians. GPS tracking planned for a future phase.
+
+Future directions: real-time technician GPS location tracking, a dispatcher map view, distance-based ranking, and route optimization for technicians. These require mobile GPS integration and are planned for a future phase.
 
 ## 8. Domain Summary
 

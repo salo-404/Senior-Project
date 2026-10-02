@@ -43,7 +43,8 @@ The MVP supports HVAC/Air Conditioning and home appliances (fridges, washing mac
 | `POST /equipment` | Customer | Register owned equipment |
 | `GET /equipment` | Customer | List own equipment |
 | `POST /requests` | Customer | Submit a manual maintenance request |
-| `POST /requests/emergency` | Customer | Submit an emergency form with description and location only; bypass AI and notify dispatch immediately |
+<!-- Updated: emergency intake form -->
+| `POST /requests/emergency` | Customer | Submit the simplified EMERGENCY form using registered equipment, default/changeable address, short description, contact preference, and optional photo; bypass AI and notify dispatch immediately |
 | `GET /cases` | Customer, Dispatcher, Manager | List cases within role scope |
 | `GET /cases/:id` | Authorized roles | Read one case and status history |
 | `PATCH /cases/:id` | Customer before submission; Dispatcher in review | Update permitted case fields |
@@ -55,7 +56,7 @@ The MVP supports HVAC/Air Conditioning and home appliances (fridges, washing mac
 
 <!-- Updated: emergency request path -->
 
-The emergency form produces a request with `source = EMERGENCY_FORM` and `contact_preference = FORM`; it does not enqueue AI work. The hotline option is frontend-only and creates no request or case.
+The emergency form produces a request with `source = EMERGENCY_FORM` and the selected `contact_preference`; it does not enqueue AI work. The backend auto-generates the title. The hotline option is frontend-only and creates no request or case. The unpaid-balance rule applies with no emergency bypass.
 
 ## 3. Dispatch and Notifications
 
@@ -76,7 +77,10 @@ The emergency form produces a request with `source = EMERGENCY_FORM` and `contac
 
 <!-- Updated: technician ranking -->
 
-NestJS alone computes the normal weights of 35% skill, 25% experience, 25% availability, 10% rate, and 5% feedback; emergency weights are 30%, 20%, 35%, 10%, and 5% respectively. AI may only present the stored factors and explanation.
+<!-- Updated: location and distance -->
+NestJS alone computes the normal weights of 35% skill, 25% experience, 30% availability, 10% rate, and 5% feedback; emergency weights are 30%, 20%, 40%, 10%, and 5% respectively. AI may only present the stored factors and explanation. Distance factor is not part of the MVP ranking algorithm. Dispatcher manually considers location when selecting technicians. GPS tracking planned for a future phase.
+
+Future directions include real-time technician GPS location tracking, a dispatcher map view, distance-based ranking, and route optimization for technicians. These require mobile GPS integration and are planned for a future phase.
 
 <!-- Updated: notifications strategy -->
 
@@ -96,6 +100,12 @@ MVP notification delivery uses frontend polling every 30 seconds against `GET /n
 | `POST /cases/:id/reviews` | Case customer | Submit one completion review |
 
 **Dependencies:** cases, dispatch, files, audit, notifications. Completion must atomically write the report, status transition/history, and notifications.
+
+<!-- Updated: payment model -->
+Payment is business-facing and has no gateway or real-money transaction. After a job is completed, the backend calculates and displays the full cost breakdown, and the dispatcher manually confirms payment. The dispatcher enters external-technician labor cost manually. A customer with an unpaid balance cannot submit any new request, including an emergency. The manager analytics/dashboard includes outstanding payments, total unpaid amount, and customer accounts with unpaid balances.
+
+<!-- Updated: technician model -->
+Normal assignments use registered company technicians. For emergency cases only, when internal technicians are unavailable, the dispatcher may record an external technician by name and phone; there is no external profile or login. External jobs skip customer reviews, commission charges, technician-ledger entries, and technician-submitted structured reports. The dispatcher records a brief job report from a completion phone call. The freelancer marketplace remains future work.
 
 <!-- Updated: technician case feedback -->
 

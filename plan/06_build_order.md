@@ -128,6 +128,18 @@ Done when: a manager can inspect metrics and approve/reject knowledge promotion 
 - Choose the first narrow vertical slice deliberately: one supported category, one standard urgency flow, and the manual path. Expanding category coverage before lifecycle correctness will slow the team.
 - The AI worker should be introduced only after stable case, assignment, and job contracts exist; otherwise its tool interfaces will churn.
 
+## Decision Updates - October 2026
+
+<!-- Updated: October 2026 decision register -->
+
+Decision 1: Payment is business-facing - cost calculation and display only, no payment gateway, manual confirmation by dispatcher, blocks new requests (including emergencies) when a customer has an unpaid balance.
+
+Decision 2: Technician model is company employees primary, emergency external technician support added (name + phone only, no system profile, cannot log in, closed one-off engagement) - no commission/ledger/review for external jobs, labor cost entered manually, job report filled by dispatcher. Freelancer marketplace = future.
+
+Decision 3: Location tracking moved to future, distance is not part of the ranking algorithm, Availability weight increased to 30% (normal) / 40% (emergency).
+
+Decision 4: EMERGENCY-priority requests use a simplified, faster intake form; URGENT uses the normal detailed form.
+
 ## Recent Decision Updates
 
 <!-- Updated: September 2026 decision register -->
