@@ -211,7 +211,7 @@ Rate score: `1 - (rate - min) / (max - min)` across candidates; `1.0` for all wh
 5. `job_costs_billing_source_check`: either `manual_labor_cost` with no hours or rate, or hours and rate with no manual cost.
 6. Immutability trigger `audit_logs_immutable` rejecting every update or delete.
 7. HNSW index `knowledge_chunks_embedding_hnsw` with `vector_cosine_ops`.
-8. Decisions migration (`20261005130000`): `assignments_external_check` made two-sided; partial unique index `technician_ledger_one_commission_per_job`; check `attachments_one_parent_check`; partial unique index `ai_runs_one_inflight_per_key`; enum types renamed to snake_case; timestamps converted to `timestamptz`; foreign keys added to the actor columns.
+8. Decisions (part of the single `20261005000000_init` migration): `assignments_external_check` made two-sided; partial unique index `technician_ledger_one_commission_per_job`; check `attachments_one_parent_check`; partial unique index `ai_runs_one_inflight_per_key`; enum types renamed to snake_case; timestamps converted to `timestamptz`; foreign keys added to the actor columns.
 
 ## 8. Manager financial summary
 
