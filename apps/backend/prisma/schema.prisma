@@ -1,0 +1,1003 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Source of truth: DB_SCHEMA (1).md (v2) - 32 model tables, 12 domains.
+
+// ============================================================
+// Enums
+// ============================================================
+
+enum Role {
+  CUSTOMER
+  DISPATCHER
+  TECHNICIAN
+  MANAGER
+
+  @@map("role")
+}
+
+enum MaintenanceCategory {
+  HVAC
+  HOME_APPLIANCES
+
+  @@map("maintenance_category")
+}
+
+enum RequestPriority {
+  NORMAL
+  URGENT
+  EMERGENCY
+
+  @@map("request_priority")
+}
+
+enum RequestStatus {
+  NEW
+  UNDER_REVIEW
+  APPROVED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  REQUIRES_FOLLOW_UP
+  REJECTED
+
+  @@map("request_status")
+}
+
+enum AiAnalysisStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  SKIPPED
+
+  @@map("ai_analysis_status")
+}
+
+enum AssignmentStatus {
+  PENDING
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  REJECTED
+
+  @@map("assignment_status")
+}
+
+enum ProfileStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+
+  @@map("profile_status")
+}
+
+enum TierRequestType {
+  INITIAL_APPLICATION
+  TIER_UPDATE
+
+  @@map("tier_request_type")
+}
+
+enum TierRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("tier_request_status")
+}
+
+enum TierDecisionOutcome {
+  TIER_CHANGED
+  SKILLS_NOTED_ONLY
+  NO_CHANGE
+
+  @@map("tier_decision_outcome")
+}
+
+enum CommissionTierName {
+  BRONZE
+  SILVER
+  GOLD
+
+  @@map("commission_tier_name")
+}
+
+enum LedgerEntryType {
+  COMMISSION_CHARGE
+  PAYMENT_RECEIVED
+  ADJUSTMENT
+
+  @@map("ledger_entry_type")
+}
+
+enum InvoiceStatus {
+  PENDING_CONFIRMATION
+  CONFIRMED
+  DISPUTED
+
+  @@map("invoice_status")
+}
+
+enum PaymentStatus {
+  PENDING
+  INVOICE_SUBMITTED
+  CONFIRMED
+  DISPUTED
+
+  @@map("payment_status")
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  OTHER
+
+  @@map("payment_method")
+}
+
+enum AttachmentPurpose {
+  CUSTOMER_PHOTO
+  TECHNICIAN_PHOTO
+  INVOICE_PHOTO
+
+  @@map("attachment_purpose")
+}
+
+enum KnowledgeSourceType {
+  MANUAL
+  CASE_REPORT
+  GUIDELINE
+
+  @@map("knowledge_source_type")
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSED
+  FAILED
+
+  @@map("processing_status")
+}
+
+enum AiAgentType {
+  MAINTENANCE_INTELLIGENCE
+  OPERATIONS_INTELLIGENCE
+  ORCHESTRATOR
+
+  @@map("ai_agent_type")
+}
+
+enum CaseSource {
+  AI
+  MANUAL
+
+  @@map("case_source")
+}
+
+enum ContactPreference {
+  FORM
+  HOTLINE
+
+  @@map("contact_preference")
+}
+
+enum UrgencyLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+
+  @@map("urgency_level")
+}
+
+enum RateType {
+  NORMAL
+  EMERGENCY
+
+  @@map("rate_type")
+}
+
+enum AiRunStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+
+  @@map("ai_run_status")
+}
+
+enum NotificationType {
+  REQUEST_SUBMITTED
+  REQUEST_STATUS_CHANGED
+  ASSIGNMENT_CREATED
+  ASSIGNMENT_ACCEPTED
+  JOB_STARTED
+  JOB_COMPLETED
+  INVOICE_SUBMITTED
+  PAYMENT_CONFIRMED
+  PAYMENT_DISPUTED
+  SAFETY_ESCALATED
+  COMMISSION_CHARGED
+  TIER_CHANGED
+  SYSTEM
+
+  @@map("notification_type")
+}
+
+enum ToolCallStatus {
+  SUCCESS
+  FAILED
+  UNAUTHORIZED
+
+  @@map("tool_call_status")
+}
+
+enum NotificationPriority {
+  NORMAL
+  HIGH
+  URGENT
+
+  @@map("notification_priority")
+}
+
+enum AuditAction {
+  // Auth
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  USER_CREATED
+  USER_UPDATED
+  USER_DEACTIVATED
+  PASSWORD_CHANGED
+  // Requests
+  REQUEST_CREATED
+  REQUEST_STATUS_CHANGED
+  REQUEST_CANCELLED
+  CASE_VERIFIED
+  CASE_CREATED_MANUAL
+  // Assignments
+  ASSIGNMENT_CREATED
+  ASSIGNMENT_ACCEPTED
+  ASSIGNMENT_STARTED
+  ASSIGNMENT_REJECTED
+  ASSIGNMENT_CANCELLED
+  // Jobs
+  JOB_REPORT_SUBMITTED
+  INVOICE_CONFIRMED_BY_CUSTOMER
+  INVOICE_DISPUTED
+  INVOICE_CONFIRMED_ON_BEHALF
+  INVOICE_PHOTO_SUBMITTED
+  PAYMENT_CONFIRMED
+  PAYMENT_DISPUTED
+  // Technician
+  TECHNICIAN_APPROVED
+  TECHNICIAN_REJECTED
+  TIER_CHANGED
+  COMMISSION_CHARGED
+  COMMISSION_PAYMENT_RECORDED
+  // Knowledge
+  KNOWLEDGE_PROMOTED
+  // AI
+  AI_TOOL_CALL
+  // Safety
+  SAFETY_ESCALATED
+  EMERGENCY_DOWNGRADED
+
+  @@map("audit_action")
+}
+
+// ============================================================
+// Domain 1 - Users & Auth
+// ============================================================
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  phone         String?  @unique
+  password_hash String
+  first_name    String
+  last_name     String
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now()) @db.Timestamptz()
+  updated_at    DateTime @updatedAt @db.Timestamptz()
+
+  roles                        UserRole[]
+  refresh_tokens               RefreshToken[]
+  customer_profile             CustomerProfile?
+  technician_profile           TechnicianProfile?
+  addresses                    Address[]
+  equipment                    Equipment[]
+  requests                     MaintenanceRequest[]    @relation("CustomerRequests")
+  conversations                AiConversation[]
+  attachments                  Attachment[]
+  notifications                Notification[]
+  tier_requests_reviewed       TechnicianTierRequest[] @relation("TierRequestReviewer")
+  requests_cancelled           MaintenanceRequest[]    @relation("RequestCancelledBy")
+  cases_verified               MaintenanceCase[]       @relation("CaseVerifiedBy")
+  status_changes               RequestStatusHistory[]  @relation("StatusChangedBy")
+  assignments_made             Assignment[]            @relation("AssignmentAssignedBy")
+  invoices_confirmed_on_behalf JobCost[]               @relation("InvoiceConfirmedOnBehalfBy")
+  invoices_submitted           JobCost[]               @relation("InvoiceSubmittedBy")
+  payments_confirmed           JobCost[]               @relation("PaymentConfirmedBy")
+  case_feedback_given          CaseFeedback[]          @relation("CaseFeedbackDispatcher")
+  knowledge_sources_created    KnowledgeSource[]       @relation("KnowledgeSourceCreatedBy")
+  knowledge_documents_verified KnowledgeDocument[]     @relation("KnowledgeDocumentVerifiedBy")
+  ledger_entries_recorded      TechnicianLedger[]      @relation("LedgerRecordedBy")
+  audit_logs                   AuditLog[]
+  reviews                      Review[]
+  ai_feedback                  AiFeedback[]
+
+  @@map("users")
+}
+
+model UserRole {
+  user_id    String
+  role       Role
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@id([user_id, role])
+  @@map("user_roles")
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  user_id    String
+  token_hash String   @unique
+  expires_at DateTime @db.Timestamptz()
+  is_revoked Boolean  @default(false)
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// Domain 2 - Customer Profiles
+// ============================================================
+
+model CustomerProfile {
+  id                 String   @id @default(uuid())
+  user_id            String   @unique
+  has_unpaid_balance Boolean  @default(false)
+  unpaid_amount      Decimal  @default(0) @db.Decimal(10, 2)
+  created_at         DateTime @default(now()) @db.Timestamptz()
+  updated_at         DateTime @updatedAt @db.Timestamptz()
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@map("customer_profiles")
+}
+
+// ============================================================
+// Domain 3 - Technician Profiles
+// ============================================================
+
+model TechnicianProfile {
+  id                  String        @id @default(uuid())
+  user_id             String        @unique
+  bio                 String?
+  years_of_experience Int           @default(0)
+  rating              Decimal       @default(0) @db.Decimal(3, 2)
+  total_reviews       Int           @default(0)
+  profile_status      ProfileStatus @default(PENDING_REVIEW)
+  current_tier_id     String?
+  outstanding_balance Decimal       @default(0) @db.Decimal(10, 2)
+  is_payment_blocked  Boolean       @default(false)
+  is_available        Boolean       @default(true)
+  normal_rate         Decimal       @db.Decimal(10, 2)
+  emergency_rate      Decimal       @db.Decimal(10, 2)
+  created_at          DateTime      @default(now()) @db.Timestamptz()
+  updated_at          DateTime      @updatedAt @db.Timestamptz()
+
+  user             User                    @relation(fields: [user_id], references: [id])
+  current_tier     CommissionTier?         @relation(fields: [current_tier_id], references: [id])
+  skills           TechnicianSkill[]
+  team_memberships TeamMember[]
+  assignments      Assignment[]
+  tier_requests    TechnicianTierRequest[]
+  ledger_entries   TechnicianLedger[]
+  reviews          Review[]
+
+  @@map("technician_profiles")
+}
+
+model TechnicianTierRequest {
+  id                    String               @id @default(uuid())
+  technician_profile_id String
+  request_type          TierRequestType
+  proposed_tier_id      String?
+  supporting_notes      String?
+  status                TierRequestStatus    @default(PENDING)
+  decision_outcome      TierDecisionOutcome?
+  final_tier_id         String?
+  reviewed_by           String?
+  review_notes          String?
+  created_at            DateTime             @default(now()) @db.Timestamptz()
+  updated_at            DateTime             @updatedAt @db.Timestamptz()
+
+  technician    TechnicianProfile @relation(fields: [technician_profile_id], references: [id])
+  proposed_tier CommissionTier?   @relation("TierRequestProposedTier", fields: [proposed_tier_id], references: [id])
+  final_tier    CommissionTier?   @relation("TierRequestFinalTier", fields: [final_tier_id], references: [id])
+  reviewer      User?             @relation("TierRequestReviewer", fields: [reviewed_by], references: [id])
+
+  @@index([technician_profile_id])
+  @@map("technician_tier_requests")
+}
+
+// ============================================================
+// Domain 4 - Skills & Teams
+// ============================================================
+
+model Skill {
+  id          String              @id @default(uuid())
+  name        String              @unique
+  category    MaintenanceCategory
+  description String?
+
+  technicians TechnicianSkill[]
+
+  @@map("skills")
+}
+
+model Team {
+  id          String              @id @default(uuid())
+  name        String
+  category    MaintenanceCategory
+  description String?
+  created_at  DateTime            @default(now()) @db.Timestamptz()
+
+  members TeamMember[]
+
+  @@map("teams")
+}
+
+model TechnicianSkill {
+  technician_profile_id String
+  skill_id              String
+  proficiency_level     Int    @default(1)
+
+  technician TechnicianProfile @relation(fields: [technician_profile_id], references: [id])
+  skill      Skill             @relation(fields: [skill_id], references: [id])
+
+  @@id([technician_profile_id, skill_id])
+  @@map("technician_skills")
+}
+
+model TeamMember {
+  team_id      String
+  user_id      String
+  role_in_team String?
+  joined_at    DateTime @default(now()) @db.Timestamptz()
+
+  team       Team              @relation(fields: [team_id], references: [id])
+  technician TechnicianProfile @relation(fields: [user_id], references: [user_id])
+
+  @@id([team_id, user_id])
+  @@map("team_members")
+}
+
+// ============================================================
+// Domain 5 - Equipment & Addresses
+// ============================================================
+
+model EquipmentType {
+  id          String              @id @default(uuid())
+  name        String
+  category    MaintenanceCategory
+  description String?
+
+  equipment Equipment[]
+
+  @@map("equipment_types")
+}
+
+model Address {
+  id         String   @id @default(uuid())
+  user_id    String
+  label      String?
+  street     String
+  city       String
+  district   String?
+  floor      String?
+  building   String?
+  notes      String?
+  is_default Boolean  @default(false)
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  user      User                 @relation(fields: [user_id], references: [id])
+  equipment Equipment[]
+  requests  MaintenanceRequest[]
+
+  @@index([user_id])
+  @@map("addresses")
+}
+
+model Equipment {
+  id                String    @id @default(uuid())
+  user_id           String
+  equipment_type_id String
+  address_id        String?
+  name              String
+  brand             String?
+  model             String?
+  serial_number     String?
+  installation_date DateTime? @db.Timestamptz()
+  notes             String?
+  created_at        DateTime  @default(now()) @db.Timestamptz()
+  updated_at        DateTime  @updatedAt @db.Timestamptz()
+
+  user           User                 @relation(fields: [user_id], references: [id])
+  equipment_type EquipmentType        @relation(fields: [equipment_type_id], references: [id])
+  address        Address?             @relation(fields: [address_id], references: [id])
+  requests       MaintenanceRequest[]
+
+  @@index([user_id])
+  @@map("equipment")
+}
+
+// ============================================================
+// Domain 6 - Maintenance Requests & Cases
+// ============================================================
+
+model MaintenanceRequest {
+  id                  String             @id @default(uuid())
+  customer_id         String
+  equipment_id        String
+  address_id          String
+  title               String
+  description         String?
+  priority            RequestPriority    @default(NORMAL)
+  status              RequestStatus      @default(NEW)
+  ai_analysis_status  AiAnalysisStatus   @default(PENDING)
+  problem_type        String?
+  intake_answers      Json?
+  is_safety_escalated Boolean            @default(false)
+  escalated_at        DateTime?          @db.Timestamptz()
+  escalation_reason   String?
+  rejection_reason    String?
+  cancellation_reason String?
+  cancelled_by        String?
+  contact_preference  ContactPreference?
+  created_at          DateTime           @default(now()) @db.Timestamptz()
+  updated_at          DateTime           @updatedAt @db.Timestamptz()
+
+  customer          User                   @relation("CustomerRequests", fields: [customer_id], references: [id])
+  equipment         Equipment              @relation(fields: [equipment_id], references: [id])
+  address           Address                @relation(fields: [address_id], references: [id])
+  case              MaintenanceCase?
+  status_history    RequestStatusHistory[]
+  assignments       Assignment[]
+  attachments       Attachment[]
+  conversations     AiConversation[]
+  ai_runs           AiRun[]
+  notifications     Notification[]
+  cancelled_by_user User?                  @relation("RequestCancelledBy", fields: [cancelled_by], references: [id])
+
+  @@index([customer_id])
+  @@index([status])
+  @@index([priority])
+  @@index([ai_analysis_status])
+  @@map("maintenance_requests")
+}
+
+model MaintenanceCase {
+  id                  String        @id @default(uuid())
+  request_id          String        @unique
+  source              CaseSource
+  summary             String?
+  urgency_level       UrgencyLevel?
+  safety_flags        Json?
+  symptoms            Json?
+  follow_up_questions Json?
+  possible_causes     Json?
+  verified_by         String?
+  verified_at         DateTime?     @db.Timestamptz()
+  created_at          DateTime      @default(now()) @db.Timestamptz()
+  updated_at          DateTime      @updatedAt @db.Timestamptz()
+
+  request  MaintenanceRequest @relation(fields: [request_id], references: [id])
+  verifier User?              @relation("CaseVerifiedBy", fields: [verified_by], references: [id])
+  feedback CaseFeedback?
+
+  @@map("maintenance_cases")
+}
+
+model RequestStatusHistory {
+  id          String         @id @default(uuid())
+  request_id  String
+  from_status RequestStatus?
+  to_status   RequestStatus
+  changed_by  String
+  reason      String?
+  created_at  DateTime       @default(now()) @db.Timestamptz()
+
+  request MaintenanceRequest @relation(fields: [request_id], references: [id])
+  actor   User               @relation("StatusChangedBy", fields: [changed_by], references: [id])
+
+  @@index([request_id])
+  @@map("request_status_history")
+}
+
+model AiConversation {
+  id         String   @id @default(uuid())
+  request_id String?
+  user_id    String
+  role       Role
+  messages   Json
+  created_at DateTime @default(now()) @db.Timestamptz()
+  updated_at DateTime @updatedAt @db.Timestamptz()
+
+  user        User                @relation(fields: [user_id], references: [id])
+  request     MaintenanceRequest? @relation(fields: [request_id], references: [id])
+  ai_runs     AiRun[]
+  attachments Attachment[]
+
+  @@index([user_id])
+  @@map("ai_conversations")
+}
+
+model AiRun {
+  id                String      @id @default(uuid())
+  conversation_id   String?
+  request_id        String?
+  agent_type        AiAgentType
+  model_name        String?
+  correlation_id    String      @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  idempotency_key   String?
+  prompt_tokens     Int?
+  completion_tokens Int?
+  latency_ms        Int?
+  status            AiRunStatus @default(PENDING)
+  error_message     String?
+  created_at        DateTime    @default(now()) @db.Timestamptz()
+
+  conversation AiConversation?     @relation(fields: [conversation_id], references: [id])
+  request      MaintenanceRequest? @relation(fields: [request_id], references: [id])
+  feedback     AiFeedback[]
+  tool_calls   AiToolCall[]
+
+  @@index([request_id])
+  @@map("ai_runs")
+}
+
+// ============================================================
+// Domain 7 - Assignments & Jobs
+// ============================================================
+
+model Assignment {
+  id                    String           @id @default(uuid())
+  request_id            String
+  technician_profile_id String?
+  is_external           Boolean          @default(false)
+  external_name         String?
+  external_phone        String?
+  assigned_by           String
+  status                AssignmentStatus @default(PENDING)
+  rejection_reason      String?
+  delay_reason          String?
+  scheduled_at          DateTime?        @db.Timestamptz()
+  accepted_at           DateTime?        @db.Timestamptz()
+  started_at            DateTime?        @db.Timestamptz()
+  expected_return_at    DateTime?        @db.Timestamptz()
+  visit_count           Int              @default(1)
+  ranking_snapshot      Json?
+  created_at            DateTime         @default(now()) @db.Timestamptz()
+  updated_at            DateTime         @updatedAt @db.Timestamptz()
+
+  request    MaintenanceRequest @relation(fields: [request_id], references: [id])
+  technician TechnicianProfile? @relation(fields: [technician_profile_id], references: [id])
+  assigner   User               @relation("AssignmentAssignedBy", fields: [assigned_by], references: [id])
+  job_report JobReport?
+  job_cost   JobCost?
+
+  @@index([request_id])
+  @@index([technician_profile_id])
+  @@index([status])
+  @@map("assignments")
+}
+
+model JobReport {
+  id                      String    @id @default(uuid())
+  assignment_id           String    @unique
+  diagnosis               String?
+  work_done               String?
+  parts_used              Json?
+  ai_analysis_was_helpful Boolean?
+  notes                   String?
+  submitted_at            DateTime? @db.Timestamptz()
+  created_at              DateTime  @default(now()) @db.Timestamptz()
+
+  assignment          Assignment          @relation(fields: [assignment_id], references: [id])
+  attachments         Attachment[]
+  knowledge_documents KnowledgeDocument[]
+
+  @@map("job_reports")
+}
+
+model JobCost {
+  id            String @id @default(uuid())
+  assignment_id String @unique
+
+  hours_worked      Decimal?  @db.Decimal(6, 2)
+  hourly_rate_used  Decimal?  @db.Decimal(10, 2)
+  rate_type         RateType?
+  extra_visits      Int       @default(0)
+  manual_labor_cost Decimal?  @db.Decimal(10, 2)
+
+  parts_cost Decimal @default(0) @db.Decimal(10, 2)
+  labor_cost Decimal @db.Decimal(10, 2)
+  total_cost Decimal @db.Decimal(10, 2)
+
+  invoice_status         InvoiceStatus @default(PENDING_CONFIRMATION)
+  customer_confirmed_at  DateTime?     @db.Timestamptz()
+  confirmed_on_behalf_by String?
+  dispute_reason         String?
+
+  payment_status       PaymentStatus @default(PENDING)
+  payment_method       PaymentMethod @default(CASH)
+  invoice_submitted_at DateTime?     @db.Timestamptz()
+  invoice_submitted_by String?
+  payment_confirmed_by String?
+  payment_confirmed_at DateTime?     @db.Timestamptz()
+
+  created_at DateTime @default(now()) @db.Timestamptz()
+  updated_at DateTime @updatedAt @db.Timestamptz()
+
+  assignment               Assignment         @relation(fields: [assignment_id], references: [id])
+  confirmed_on_behalf_user User?              @relation("InvoiceConfirmedOnBehalfBy", fields: [confirmed_on_behalf_by], references: [id])
+  invoice_submitter        User?              @relation("InvoiceSubmittedBy", fields: [invoice_submitted_by], references: [id])
+  payment_confirmer        User?              @relation("PaymentConfirmedBy", fields: [payment_confirmed_by], references: [id])
+  ledger_entries           TechnicianLedger[]
+
+  @@map("job_costs")
+}
+
+// ============================================================
+// Domain 8 - Reviews & Feedback
+// ============================================================
+
+model Review {
+  id                    String   @id @default(uuid())
+  request_id            String   @unique
+  technician_profile_id String
+  customer_id           String
+  rating                Int
+  comment               String?
+  is_visible            Boolean  @default(true)
+  created_at            DateTime @default(now()) @db.Timestamptz()
+
+  technician TechnicianProfile @relation(fields: [technician_profile_id], references: [id])
+  customer   User              @relation(fields: [customer_id], references: [id])
+
+  @@index([technician_profile_id])
+  @@map("reviews")
+}
+
+model AiToolCall {
+  id          String         @id @default(uuid())
+  ai_run_id   String
+  tool_name   String
+  input       Json
+  output      Json?
+  status      ToolCallStatus
+  duration_ms Int?
+  created_at  DateTime       @default(now()) @db.Timestamptz()
+
+  ai_run AiRun @relation(fields: [ai_run_id], references: [id])
+
+  @@index([ai_run_id])
+  @@map("ai_tool_calls")
+}
+
+model AiFeedback {
+  id         String   @id @default(uuid())
+  ai_run_id  String
+  user_id    String
+  rating     Int
+  comment    String?
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  ai_run AiRun @relation(fields: [ai_run_id], references: [id])
+  user   User  @relation(fields: [user_id], references: [id])
+
+  @@unique([ai_run_id, user_id])
+  @@map("ai_feedback")
+}
+
+model CaseFeedback {
+  id                     String   @id @default(uuid())
+  case_id                String   @unique
+  dispatcher_id          String
+  is_accurate            Boolean
+  notes                  String?
+  approved_for_knowledge Boolean  @default(false)
+  created_at             DateTime @default(now()) @db.Timestamptz()
+
+  case       MaintenanceCase @relation(fields: [case_id], references: [id])
+  dispatcher User            @relation("CaseFeedbackDispatcher", fields: [dispatcher_id], references: [id])
+
+  @@map("case_feedback")
+}
+
+// ============================================================
+// Domain 9 - Notifications
+// ============================================================
+
+model Notification {
+  id                String               @id @default(uuid())
+  user_id           String
+  notification_type NotificationType
+  priority          NotificationPriority @default(NORMAL)
+  title             String
+  body              String
+  data              Json?
+  request_id        String?
+  is_read           Boolean              @default(false)
+  read_at           DateTime?            @db.Timestamptz()
+  created_at        DateTime             @default(now()) @db.Timestamptz()
+
+  user    User                @relation(fields: [user_id], references: [id])
+  request MaintenanceRequest? @relation(fields: [request_id], references: [id])
+
+  @@index([user_id, is_read])
+  @@map("notifications")
+}
+
+// ============================================================
+// Domain 10 - Audit & Attachments
+// ============================================================
+
+model AuditLog {
+  id             String      @id @default(uuid())
+  user_id        String?
+  action         AuditAction
+  entity_type    String
+  entity_id      String
+  old_value      Json?
+  new_value      Json?
+  ip_address     String?
+  correlation_id String?     @db.Uuid
+  created_at     DateTime    @default(now()) @db.Timestamptz()
+
+  user User? @relation(fields: [user_id], references: [id])
+
+  @@index([entity_type, entity_id])
+  @@index([user_id])
+  @@index([created_at])
+  @@map("audit_logs")
+}
+
+model Attachment {
+  id              String            @id @default(uuid())
+  user_id         String
+  request_id      String?
+  job_report_id   String?
+  conversation_id String?
+  purpose         AttachmentPurpose
+  file_url        String
+  file_type       String
+  file_size       Int
+  created_at      DateTime          @default(now()) @db.Timestamptz()
+
+  user         User                @relation(fields: [user_id], references: [id])
+  request      MaintenanceRequest? @relation(fields: [request_id], references: [id])
+  job_report   JobReport?          @relation(fields: [job_report_id], references: [id])
+  conversation AiConversation?     @relation(fields: [conversation_id], references: [id])
+
+  @@index([request_id])
+  @@index([job_report_id])
+  @@map("attachments")
+}
+
+// ============================================================
+// Domain 11 - Knowledge Base
+// ============================================================
+
+model KnowledgeSource {
+  id          String              @id @default(uuid())
+  title       String
+  source_type KnowledgeSourceType
+  category    MaintenanceCategory
+  file_url    String?
+  is_active   Boolean             @default(true)
+  created_by  String
+  created_at  DateTime            @default(now()) @db.Timestamptz()
+
+  documents KnowledgeDocument[]
+  creator   User                @relation("KnowledgeSourceCreatedBy", fields: [created_by], references: [id])
+
+  @@map("knowledge_sources")
+}
+
+model KnowledgeDocument {
+  id                   String           @id @default(uuid())
+  source_id            String
+  source_job_report_id String?
+  content              String
+  processing_status    ProcessingStatus @default(PENDING)
+  total_chunks         Int?
+  verified_by          String?
+  created_at           DateTime         @default(now()) @db.Timestamptz()
+  updated_at           DateTime         @updatedAt @db.Timestamptz()
+
+  source     KnowledgeSource  @relation(fields: [source_id], references: [id])
+  job_report JobReport?       @relation(fields: [source_job_report_id], references: [id])
+  chunks     KnowledgeChunk[]
+  verifier   User?            @relation("KnowledgeDocumentVerifiedBy", fields: [verified_by], references: [id])
+
+  @@index([source_id])
+  @@map("knowledge_documents")
+}
+
+// `embedding` is read and written with $queryRaw / $executeRaw only.
+model KnowledgeChunk {
+  id          String                      @id @default(uuid())
+  document_id String
+  content     String
+  embedding   Unsupported("vector(1024)")
+  chunk_index Int
+  metadata    Json?
+  created_at  DateTime                    @default(now()) @db.Timestamptz()
+
+  document KnowledgeDocument @relation(fields: [document_id], references: [id])
+
+  @@index([document_id])
+  @@map("knowledge_chunks")
+}
+
+// ============================================================
+// Domain 12 - Commission & Payouts
+// ============================================================
+
+model CommissionTier {
+  id                   String             @id @default(uuid())
+  name                 CommissionTierName @unique
+  commission_rate      Decimal            @db.Decimal(3, 2)
+  min_rating           Decimal?           @db.Decimal(3, 2)
+  min_experience_years Int?
+  min_completed_jobs   Int?
+  created_at           DateTime           @default(now()) @db.Timestamptz()
+  updated_at           DateTime           @updatedAt @db.Timestamptz()
+
+  technicians    TechnicianProfile[]
+  ledger_entries TechnicianLedger[]
+  proposed_in    TechnicianTierRequest[] @relation("TierRequestProposedTier")
+  final_in       TechnicianTierRequest[] @relation("TierRequestFinalTier")
+
+  @@map("commission_tiers")
+}
+
+model TechnicianLedger {
+  id                    String          @id @default(uuid())
+  technician_profile_id String
+  entry_type            LedgerEntryType
+  amount                Decimal         @db.Decimal(10, 2)
+  balance_after         Decimal         @db.Decimal(10, 2)
+  job_cost_id           String?
+  tier_id_at_charge     String?
+  rate_applied          Decimal?        @db.Decimal(3, 2)
+  recorded_by           String?
+  payment_note          String?
+  created_at            DateTime        @default(now()) @db.Timestamptz()
+
+  technician TechnicianProfile @relation(fields: [technician_profile_id], references: [id])
+  tier       CommissionTier?   @relation(fields: [tier_id_at_charge], references: [id])
+  job_cost   JobCost?          @relation(fields: [job_cost_id], references: [id])
+  recorder   User?             @relation("LedgerRecordedBy", fields: [recorded_by], references: [id])
+
+  @@index([technician_profile_id])
+  @@map("technician_ledger")
+}

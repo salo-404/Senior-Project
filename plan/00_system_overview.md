@@ -4,20 +4,22 @@
 
 maintAIn is an AI-powered maintenance management platform. It turns a customer report into a structured maintenance case while preserving human authority over all operational decisions. It supports the full workflow from a report through dispatch, job execution, technician verification, and operational insight.
 
-<!-- Updated: maintenance categories -->
 The MVP service scope is HVAC/Air Conditioning and home appliances: fridges, washing machines, and dishwashers. The focus is indoor spaces: homes, offices, universities, and schools. Plumbing, electrical, and generators are future directions only and are not part of the MVP.
+
+## Terms
+
+A **request** is the raw customer submission and carries the lifecycle status. A **case** is the structured record built from it. The API and UI say "case" for the combined view; see `plan/02_database_schema.md`.
 
 ## Roles
 
 | Role | Primary responsibility | Authority |
 | --- | --- | --- |
 | Customer | Report a problem, provide evidence, review a generated draft, track progress, review completed work | Creates and edits their own request before submission |
-| Dispatcher | Review cases, request clarification, approve/reject, assign technicians, manage exceptions | Final authority for approval and assignment |
-| Technician | Accept assigned work, execute it, report findings and outcome | Verified job outcome is the authoritative service record |
-| Manager | Monitor operations and ask approved analytics questions | Reviews metrics and verified operational data |
+| Dispatcher | Review cases, request clarification, approve/reject, assign technicians, manage exceptions, confirm invoices on a customer's behalf, verify payment photos, give job feedback | Final authority for approval and assignment |
+| Technician | Accept or reject assigned work, execute it, report findings and outcome, upload the paid-invoice photo | Verified job outcome is the authoritative service record |
+| Manager | Monitor operations and finances, ask approved analytics questions, govern knowledge sources, hide reviews, record technician commission payments | Reviews metrics and verified operational data; can also confirm or dispute payments |
 
-<!-- Updated: technician model -->
-Technician model: the primary model is company-contracted technicians registered in the system with full profiles, skills, teams, and availability. For super urgent emergency cases only, when all internal technicians are occupied or unavailable, the dispatcher may record an external technician by name and phone only. External engagement is a closed, one-off transaction handled directly by the dispatcher; the external technician has no system profile and cannot log in. A full freelancer marketplace, external technician portal, and self-registration for verified contractors are future directions.
+Technician model: the primary model is company-contracted technicians registered in the system. A technician applies and is approved (`profile_status`), holds skills, teams, a commission tier (`BRONZE`, `SILVER`, `GOLD`), an `is_available` switch, and two hourly rates (`normal_rate` and `emergency_rate`). Dispatchers and managers are plain users with roles and no separate profile. For super urgent emergency cases only, when all internal technicians are occupied or unavailable, the dispatcher may record an external technician by name and phone only. External engagement is a closed, one-off transaction handled directly by the dispatcher; the external technician has no system profile and cannot log in. A full freelancer marketplace, external technician portal, and self-registration for verified contractors are future directions.
 
 ## Two Request Paths
 
@@ -26,8 +28,9 @@ Technician model: the primary model is company-contracted technicians registered
 1. Customer submits a structured form and optional images.
 2. Dispatcher reviews the case, asks for follow-up if necessary, and approves it.
 3. Dispatcher assigns a technician.
-4. Technician accepts, executes the job, and submits a verified outcome.
-5. The case is completed and the customer may submit a review.
+4. Technician accepts (or rejects) the assignment, starts and executes the job, and submits a verified outcome with hours and parts.
+5. The backend calculates the invoice; the customer (or dispatcher on their behalf) confirms it, pays the technician in cash, and the technician uploads a photo of the paid invoice.
+6. A dispatcher or manager verifies the photo and confirms payment; the customer may then review the work.
 
 This path is always available. It is the platform's operational baseline and must continue during an AI outage.
 
@@ -49,8 +52,12 @@ The NestJS backend alone applies lifecycle transitions:
 ```text
 NEW -> UNDER_REVIEW -> APPROVED -> ASSIGNED -> IN_PROGRESS -> COMPLETED
                     -> REQUIRES_FOLLOW_UP -> UNDER_REVIEW
-                    -> CANCELLED
+                    -> REJECTED
+ASSIGNED -> APPROVED   (technician rejects the assignment)
+NEW, UNDER_REVIEW, REQUIRES_FOLLOW_UP, APPROVED, ASSIGNED -> CANCELLED
 ```
+
+`COMPLETED`, `CANCELLED`, and `REJECTED` are terminal.
 
 Key transition ownership:
 
@@ -60,19 +67,19 @@ Key transition ownership:
 | `NEW` to `UNDER_REVIEW` | Dispatcher/system | Dispatcher begins review |
 | `UNDER_REVIEW` to `REQUIRES_FOLLOW_UP` | Dispatcher | A reason is required; customer can provide clarification |
 | `UNDER_REVIEW` to `APPROVED` | Dispatcher | Dispatcher has reviewed the case |
+| `UNDER_REVIEW` to `REJECTED` | Dispatcher | A reason is required |
+| `REQUIRES_FOLLOW_UP` to `UNDER_REVIEW` | Customer | Customer answers the follow-up |
 | `APPROVED` to `ASSIGNED` | Dispatcher | Valid active technician assignment required |
-| `ASSIGNED` to `IN_PROGRESS` | Assigned technician | Technician accepts the current assignment |
+| `ASSIGNED` to `APPROVED` | Assigned technician | Technician rejects the assignment with a reason; the request returns to the pool |
+| `ASSIGNED` to `IN_PROGRESS` | Assigned technician | Assignment is `ACCEPTED` (technician accepted); technician starts work |
 | `IN_PROGRESS` to `COMPLETED` | Assigned technician | Verified outcome and completion details required |
-| Eligible pre-completion state to `CANCELLED` | Customer or dispatcher per policy | Cancellation reason and actor are recorded |
+| `NEW`, `UNDER_REVIEW`, `REQUIRES_FOLLOW_UP`, `APPROVED`, or `ASSIGNED` to `CANCELLED` | Customer | Reason and actor are recorded; a customer cannot cancel `IN_PROGRESS` work |
 
 ## Emergency Request Path
 
-<!-- Updated: emergency request path -->
-
 Emergency requests have two customer options:
 
-<!-- Updated: emergency intake form -->
-1. **Emergency form:** only when the customer selects `EMERGENCY`, the customer selects already-registered equipment, confirms or changes the pre-filled default address, enters a short description, chooses `FORM` or `HOTLINE` contact preference, and may attach a photo. The backend auto-generates the title, sends the request immediately to the dispatcher queue, and creates an immediate dispatcher notification. This path does not trigger AI analysis. Customers with an unpaid balance cannot use this form.
+1. **Emergency form:** only when the customer selects `EMERGENCY`, the customer selects already-registered equipment, confirms or changes the pre-filled default address, enters a short description, chooses `FORM` or `HOTLINE` contact preference, and may attach a photo. The backend auto-generates the title, sends the request immediately to the dispatcher queue, and creates an immediate dispatcher notification. This path does not trigger AI analysis. Customers with an unpaid balance can still use this form; the dispatcher notification flags the unpaid balance.
 2. **Hotline:** the interface displays the hotline number. This is informational only: it has no backend workflow and creates no maintenance case.
 
 ## Core Principles
@@ -87,30 +94,26 @@ Emergency requests have two customer options:
 
 ## Ranking Rules
 
-<!-- Updated: technician ranking -->
-
 The backend produces a normalized, explainable score from eligible technicians.
 
 | Situation | Skill | Experience | Availability | Rate | Customer feedback |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Normal | 35% | 25% | 30% | 10% | 5% |
-| Emergency | 30% | 20% | 40% | 10% | 5% |
+| Normal | 30% | 15% | 30% | 10% | 15% |
+| Emergency | 30% | 15% | 40% | 5% | 10% |
 
-Eligibility checks happen before scoring: active status, required skill coverage, availability, and any safety restriction. The dispatcher sees the candidate list, individual factors, and the final recommendation but may choose any permitted eligible technician.
+Eligibility checks happen before scoring: approved profile, required skill coverage, not payment-blocked, `is_available`, and any safety restriction. A technician with an accepted or in-progress assignment scores 0 on availability. The rate factor uses the technician's emergency rate for emergency requests and normal rate otherwise; lower is better, and if every candidate charges the same, all score 1.0 on rate. The dispatcher sees the candidate list, individual factors, and the final recommendation but may choose any permitted eligible technician.
 
 NestJS calculates these weights and scores. AI may explain a ranking but never calculates one.
 
-<!-- Updated: location and distance -->
 Distance factor is not part of the MVP ranking algorithm. Dispatcher manually considers location when selecting technicians. GPS tracking planned for a future phase.
 
 Future directions include real-time technician GPS location tracking, a dispatcher map view, distance-based ranking, and route optimization for technicians. These require mobile GPS integration and are planned for a future phase.
 
-<!-- Updated: payment model -->
-Payment is business-facing: the system calculates and displays costs, but has no payment gateway or real-money transaction. After completion, the customer sees the full cost breakdown and payment remains pending until the dispatcher confirms it manually. A customer with an unpaid balance cannot submit any new request, including emergencies, until the account is unlocked after confirmation.
+Payment is business-facing and cash only: the system calculates and displays costs but has no payment gateway. After completion the customer sees the cost breakdown and confirms the invoice (after 7 days without a response, a dispatcher can confirm on their behalf). The customer pays the technician in cash, the technician uploads a photo of the paid invoice, and a dispatcher or manager confirms or disputes payment against that photo. A customer with an unpaid balance, including a disputed payment, cannot submit a normal or urgent request until payment is confirmed. Emergencies are never blocked: they go through and the dispatcher sees the unpaid balance as a flag.
+
+Commission applies only to registered technicians: only when payment is confirmed (not on job completion and not on invoice confirmation), the technician's tier rate is charged on labor cost only (parts excluded) through a ledger, and a manager records payments the technician makes. External technicians have no commission, ledger entry, or review; their labor cost is entered manually by the dispatcher.
 
 ## LLM Model Strategy
-
-<!-- Updated: LLM model strategy -->
 
 **Current plan - subject to change during implementation phase.** Both specialized agents use the same Qwen model. The implementation will choose local inference through Ollama or an online Qwen API after hardware, cost, and quality testing. The embedding model is planned as a local pretrained model through Ollama if embeddings are needed; that choice will also be confirmed during implementation.
 
@@ -118,13 +121,10 @@ No fine-tuning is required for the MVP. RAG supplies domain knowledge. Fine-tuni
 
 ## Central AI Chat
 
-<!-- Updated: AI architecture clarification -->
-
-All roles use one central chat interface operated by the Orchestrator. For each message, it either answers a simple permitted question directly, routes customer work to the Maintenance Intelligence Agent, or routes dispatcher work to the Operations Intelligence Agent. Managers use the Orchestrator with controlled backend analytics tools only; there is no third agent.
+All roles use one central chat interface operated by the Orchestrator. For each message, it either answers a simple permitted question directly, routes customer work to the Maintenance Intelligence Agent, or routes dispatcher work to the Operations Intelligence Agent. Managers and technicians talk to the Orchestrator directly: managers get controlled analytics tools, and technicians get job-scoped tools limited to their active assignments. When the speaker is a customer or dispatcher, the Orchestrator hands the conversation to the matching agent. Backend RBAC is checked on every tool call, and there is no third agent.
 
 ## Known Planning Risks
 
-- Define a single urgency vocabulary and the exact condition that makes a request an emergency before ranking is implemented.
-- Define cancellation rights by state, including whether a customer can cancel after assignment.
+- Emergency rule (decided): customer-chosen `priority` (`NORMAL`, `URGENT`, `EMERGENCY`) drives the queue and ranking weights, and a request whose assessed `urgency_level` is `HIGH` or `CRITICAL` is escalated to emergency handling by the backend. AI may only flag it.
 - The MVP category list needs stable HVAC and home-appliance definitions so prompts, forms, skills, and RAG ingestion share the same boundary.
-- Knowledge promotion needs a manager/dispatcher approval policy and a de-identification rule before verified case text is indexed.
+- Knowledge promotion is gated by the dispatcher's feedback approval (`approved_for_knowledge`); managers govern sources and can deactivate them. A de-identification rule is still needed before verified case text is indexed.

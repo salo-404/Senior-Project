@@ -16,11 +16,10 @@ NestJS modular monolith <----> PostgreSQL with pgvector
                                   Python AI Worker
                                    |             |
                                    v             v
-<!-- Updated: LLM model strategy -->
                          Qwen via Ollama or online API   Optional local embedding model via Ollama
 ```
 
-The web application communicates only with NestJS. The Python worker receives a serialized job through BullMQ and returns a validated result to a backend-owned completion path. The worker has no PostgreSQL credentials and no object-storage credential that bypasses NestJS authorization.
+The web application communicates only with NestJS. The Python worker receives a serialized job through BullMQ and returns a validated result to a backend-owned completion path. The worker has no PostgreSQL credentials and no object-storage credential that bypasses NestJS authorization. Knowledge retrieval is a NestJS tool, and document ingestion returns chunks to a NestJS endpoint that writes them.
 
 ## Technology Responsibilities
 
@@ -32,24 +31,24 @@ The web application communicates only with NestJS. The Python worker receives a 
 | PostgreSQL + pgvector | Transactional data, audit data, conversation metadata, knowledge chunks and embeddings |
 | Redis + BullMQ | Durable asynchronous AI job queue, retry state, delayed jobs |
 | Python AI Worker | Qwen calls, image analysis, retrieval orchestration, structured output validation before callback/result storage |
-<!-- Updated: LLM model strategy -->
 | Qwen via Ollama or online API | **Current plan - subject to change during implementation phase.** Both agents use the same Qwen model; local Ollama or an online Qwen API will be selected after hardware, cost, and quality testing. |
 | Local pretrained embedding model via Ollama | Used for embeddings if needed; selection is to be confirmed during implementation. No fine-tuning is planned for the MVP. |
-| Object storage | Original customer images and approved document assets, accessed through backend-issued authorized operations |
+| Object storage (S3-compatible API) | Original customer images, invoice photos, and approved document assets, accessed through backend-issued authorized operations. RustFS locally and Cloudflare R2's free tier in deployment; the S3 interface keeps the provider swappable. |
 
 ## NestJS Modules
 
 | Module | Main responsibility |
 | --- | --- |
 | `auth` | Login, JWT issuance/refresh, password handling, session revocation |
-| `identity` | Users, role assignments, customer/dispatcher/technician profiles |
+| `identity` | Users, role assignments, customer and technician profiles, technician onboarding and tier requests |
 | `audit` | Immutable records for critical actions and AI tool calls |
-| `files` | Attachment metadata, authorized upload/download access, image ownership checks |
+| `files` | Attachment metadata (customer, technician, and invoice photos), authorized upload/download access, image ownership checks |
 | `equipment` | Customer equipment and equipment types |
 | `cases` | Requests, maintenance cases, evidence, lifecycle and history |
 | `dispatch` | Dispatcher review, technician assignments, ranking and availability checks |
-| `jobs` | Technician acceptance, work execution, job reports, costs/parts when enabled |
-| `reviews` | Customer feedback following completed work |
+| `jobs` | Technician acceptance, work execution, job reports, cost calculation, invoice and cash-payment verification |
+| `reviews` | Customer reviews and dispatcher case feedback following completed work |
+| `commission` | Commission tiers, technician ledger, outstanding balances |
 | `notifications` | In-app notification records and delivery coordination |
 | `ai-gateway` | Conversations, role routing, controlled tools, run records, queue contracts, result application |
 | `knowledge` | Curated sources, document ingestion coordination, chunks, verified-case promotion |
@@ -88,7 +87,7 @@ The worker treats every job payload as untrusted input, uses a correlation ID, a
 | Dispatcher review, approval, assignment | Follow-up question generation |
 | Technician accept/start/complete actions | RAG analysis and structured case draft generation |
 | Reviews, availability updates, ranking read | Technician job brief generation |
-| Manager analytics tool query authorization | Knowledge document extraction/chunking/embedding |
+| Manager analytics tool query authorization | Knowledge document extraction/chunking/embedding (worker computes, NestJS stores) |
 
 The API returns an `ai_run_id` and a pending status for async work. Clients poll a run endpoint or receive a notification; they never wait for a model call in the HTTP request.
 

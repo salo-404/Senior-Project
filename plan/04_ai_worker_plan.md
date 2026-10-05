@@ -14,17 +14,14 @@ The Python worker provides intelligence only. NestJS owns identity, authorizatio
 | Operations Intelligence Agent | Dispatcher-facing ranking explanation and permitted operational support |
 | Technician assistant | Job-scoped summary, possible causes, tools, and grounded guidance |
 | Manager orchestration | Uses controlled analytics tools; no separate agent or RAG corpus |
-| RAG service | Retrieval filtering, similarity query through backend tool, context/citation preparation |
+| RAG service | Calls the NestJS `search_knowledge` tool (which runs the filtered similarity query), context/citation preparation; for ingestion, extracts, chunks, and embeds, then returns chunks to NestJS |
 | Tool client | Calls only declared NestJS tool endpoints using scoped worker credentials |
-<!-- Updated: LLM model strategy -->
 | Provider adapters | **Current plan - subject to change during implementation phase.** The same Qwen model serves both agents through Ollama or an online API, selected after hardware, cost, and quality testing; a local pretrained Ollama embedding model is used if needed. No MVP fine-tuning is planned. |
 | Validator | Pydantic schema, enum, reference, safety, citation, and policy checks |
 
 ## Orchestrator Logic
 
-<!-- Updated: AI architecture clarification -->
-
-The Orchestrator is the single central chat interface for all roles. It answers simple permitted questions directly or routes work to the Maintenance Intelligence Agent or Operations Intelligence Agent. Managers use only the Orchestrator and controlled backend analytics tools; there is no third manager agent. RAG supplies domain knowledge in place of MVP fine-tuning.
+The Orchestrator is the single central chat interface for all roles. It answers simple permitted questions directly or routes work to the Maintenance Intelligence Agent or Operations Intelligence Agent. Managers and technicians use the Orchestrator directly with role-scoped tools (analytics for managers, job-scoped tools for technicians); customers are handed to the Maintenance Intelligence Agent and dispatchers to the Operations Intelligence Agent. Backend RBAC applies to every tool call; there is no third agent. RAG supplies domain knowledge in place of MVP fine-tuning.
 
 1. Load the job contract, user role, conversation scope, permitted capabilities, and case/job context supplied by NestJS.
 2. Reject an invalid role/context combination before sending anything to a model. A technician conversation must have an active permitted assignment; a customer conversation must be limited to their records.
@@ -41,7 +38,6 @@ The Orchestrator is the single central chat interface for all roles. It answers 
 - Customer message history and current message.
 - Authorized attachment references, not unrestricted object-storage paths.
 - Customer-supplied equipment context and case draft fields.
-<!-- Updated: maintenance categories -->
 - Permitted MVP maintenance scope: HVAC/Air Conditioning and home appliances (fridges, washing machines, and dishwashers) in indoor spaces. Plumbing, electrical, and generators are future directions and must not be treated as supported MVP categories.
 
 ### Work
@@ -127,7 +123,7 @@ Do not put plaintext passwords, database credentials, long-lived JWTs, or unrest
   "result": {
     "summary": "...",
     "category": "HVAC",
-    "urgency": "NORMAL",
+    "urgency": "MEDIUM",
     "safety_flags": [],
     "possible_causes": ["..."],
     "follow_up_questions": [],
@@ -139,7 +135,7 @@ Do not put plaintext passwords, database credentials, long-lived JWTs, or unrest
 }
 ```
 
-Failure results use `FAILED` or `NEEDS_MANUAL_REVIEW`, a stable failure code, and a user-safe message. They do not return a partially trusted domain mutation.
+Failure results use `FAILED` or `NEEDS_MANUAL_REVIEW`, a stable failure code, and a user-safe message. NestJS stores the run as `FAILED` in `ai_runs` (states are `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`) and keeps the code in `error_message`. They do not return a partially trusted domain mutation.
 
 ## Validation and Fallback
 
@@ -151,8 +147,15 @@ Failure results use `FAILED` or `NEEDS_MANUAL_REVIEW`, a stable failure code, an
 6. On model failure: retry according to BullMQ policy, try the approved fallback model, then mark the run failed and preserve manual workflow.
 7. On RAG failure: retry; for non-safety responses allow a clearly marked response without RAG; for safety/diagnosis-sensitive output require human review.
 
+## Knowledge Ingestion
+
+When NestJS creates a `knowledge_documents` row (an uploaded manual or guideline, or a `CASE_REPORT` promoted after the dispatcher's `approved_for_knowledge` feedback), it queues an ingestion job. The worker extracts text, chunks it, embeds each chunk, and posts the chunks to the NestJS ingestion endpoint. NestJS validates and writes `knowledge_chunks` (with `metadata` for category, equipment type, and brand filtering), `processing_status` (`PENDING`, `PROCESSED`, `FAILED`), and `total_chunks`. The worker never writes to the database itself.
+
 ## AI Risks
 
 - Define the precise worker-to-backend authentication mechanism before implementation; a generic service token without run scope is too broad.
+- Tool calls are persisted in `ai_tool_calls`, and each run carries a correlation ID and an idempotency key; duplicate callbacks for the same key are rejected.
+- The worker authenticates with a short-lived credential bound to a single run, never a shared or long-lived token.
+- Model plan (decided): local Qwen through Ollama is primary and the online Qwen API is the fallback model.
 - Model and embedding selection remain an implementation decision. Freeze the embedding model before indexing documents.
 - Image-analysis acceptance criteria need evaluation cases before relying on the feature for urgency or safety flags.

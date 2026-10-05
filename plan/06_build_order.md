@@ -9,7 +9,7 @@ Each stage must have migration coverage where applicable, API tests for authoriz
 Build:
 
 1. NestJS application structure and Prisma connection to PostgreSQL.
-2. `users`, `roles`, `user_roles`, role-profile, session/refresh, and `audit_logs` schema.
+2. `users`, `user_roles` (role enum), `refresh_tokens`, `customer_profiles`, `technician_profiles`, and `audit_logs` schema.
 3. JWT login/refresh/logout, current-user endpoint, guards, decorators, and seeded four-role test users.
 4. Profile updates with audit records.
 
@@ -35,9 +35,9 @@ Done when: a customer can create equipment, submit a manual report with permitte
 
 Build:
 
-1. Technician profile enrichment, skills, teams, availability, and active-status rules.
-2. Deterministic eligibility and normal/emergency ranking service with factor-level explanation payload.
-3. Assignment transaction, ranking snapshot, dispatcher confirmation, and notification records.
+1. Technician onboarding (application, approval, tier requests), skills, teams, the availability switch, and eligibility rules.
+2. Deterministic eligibility and normal/emergency ranking service (30/30/15/15/10 and 30/40/15/10/5) with factor-level explanation payload and priority-aware rate.
+3. Assignment transaction with schedule, ranking snapshot, dispatcher confirmation, and notification records.
 4. Dispatcher assignment workspace and technician assignment list.
 
 Done when: only an approved case can be assigned; the system returns explainable backend scores; a dispatcher can override the top recommendation with any eligible technician; the assignment appears for the technician.
@@ -48,11 +48,14 @@ Done when: only an approved case can be assigned; the system returns explainable
 
 Build:
 
-1. Technician accept/start workflow.
+1. Technician accept, reject, and start workflow, including return of a rejected request to `APPROVED`.
 2. Job report submission with verified outcome and completion evidence.
-3. Atomic completion transition, history, audit record, and notifications.
-4. Customer review eligibility and one-review constraint.
-5. Technician workspace and customer completion/review UI.
+3. Atomic completion transition, history, audit record, notifications, and backend cost calculation (labor from the dual rate, parts from the report, no base price).
+   Invoice confirmation by the customer or dispatcher, technician paid-invoice photo upload, dispatcher/manager payment confirm or dispute, recomputation of the unpaid-balance block, and commission ledger charges.
+4. Emergency external-technician assignment and dispatcher-entered job report.
+5. Customer review eligibility and one-review constraint (skipped for external jobs).
+6. Dispatcher case feedback (`case_feedback`: accuracy and approval for knowledge).
+7. Technician workspace, dispatcher payment screen, and customer completion/review UI.
 
 Done when: an assigned technician can accept and complete a job; their verified outcome is persisted and visible to authorized users; a customer can review a completed case.
 
@@ -63,7 +66,7 @@ Done when: an assigned technician can accept and complete a job; their verified 
 Build:
 
 1. Redis/BullMQ setup and versioned run/job contract.
-2. `ai_conversations`, `ai_messages`, `ai_runs`, `ai_tool_calls`, and feedback schema.
+2. `ai_conversations` (messages stored as JSON), `ai_runs`, and `ai_feedback` tables (already in the schema); decide where tool calls are recorded.
 3. NestJS AI gateway with conversation/resource authorization and pending/failed result states.
 4. Python worker skeleton, controlled backend tool client, correlation IDs, Pydantic contract validation, retries, and failure callbacks.
 5. Frontend shared chat run-state component with a non-AI fallback link to manual forms/actions.
@@ -105,10 +108,10 @@ Build:
 
 1. Aggregate operational/technician/AI run analytics endpoints.
 2. Manager chat routing to controlled analytics tools.
-3. Knowledge source management and verified-case promotion approval flow.
-4. Audit, provenance, and feedback reporting screens.
+3. Knowledge source governance (activate/deactivate) and review of promoted verified cases. Promotion itself is gated by the dispatcher's feedback approval from stage 4.
+4. Payment analytics, and audit, provenance, and feedback reporting screens.
 
-Done when: a manager can inspect metrics and approve/reject knowledge promotion with a complete audit trail; AI-generated content alone cannot become trusted knowledge.
+Done when: a manager can inspect metrics and govern knowledge sources, with promotion and every source change fully audited; AI-generated content alone cannot become trusted knowledge.
 
 ## Cross-Stage Release Gates
 
@@ -128,31 +131,25 @@ Done when: a manager can inspect metrics and approve/reject knowledge promotion 
 - Choose the first narrow vertical slice deliberately: one supported category, one standard urgency flow, and the manual path. Expanding category coverage before lifecycle correctness will slow the team.
 - The AI worker should be introduced only after stable case, assignment, and job contracts exist; otherwise its tool interfaces will churn.
 
-## Decision Updates - October 2026
+## Decision Log
 
-<!-- Updated: October 2026 decision register -->
-
-Decision 1: Payment is business-facing - cost calculation and display only, no payment gateway, manual confirmation by dispatcher, blocks new requests (including emergencies) when a customer has an unpaid balance.
-
-Decision 2: Technician model is company employees primary, emergency external technician support added (name + phone only, no system profile, cannot log in, closed one-off engagement) - no commission/ledger/review for external jobs, labor cost entered manually, job report filled by dispatcher. Freelancer marketplace = future.
-
-Decision 3: Location tracking moved to future, distance is not part of the ranking algorithm, Availability weight increased to 30% (normal) / 40% (emergency).
-
-Decision 4: EMERGENCY-priority requests use a simplified, faster intake form; URGENT uses the normal detailed form.
-
-## Recent Decision Updates
-
-<!-- Updated: September 2026 decision register -->
-
-| Date | Decision update |
+| Date | Decision |
 | --- | --- |
-| September 2026 | MVP categories are HVAC/Air Conditioning and home appliances for indoor spaces; plumbing, electrical, and generators are future directions. |
+| September 2026 | MVP categories are HVAC/Air Conditioning and home appliances (fridges, washing machines, dishwashers) for indoor spaces; plumbing, electrical, and generators are future directions. |
 | September 2026 | NestJS-only technician ranking uses the confirmed normal and emergency weights. |
 | September 2026 | Qwen is the current shared-agent model plan; Ollama versus online API, plus embeddings, remain implementation decisions; no MVP fine-tuning. |
-| September 2026 | Dispatchers and managers share `staff_profiles`; their role difference remains in `user_roles`. |
+| September 2026 | Dispatchers and managers share `staff_profiles`; their role difference stays in `user_roles`. |
 | September 2026 | Emergency form requests bypass AI and notify dispatch immediately; hotline display creates no case. |
 | September 2026 | Dispatchers provide technician-case feedback after reviewing job reports; technicians record AI helpfulness in their own reports. |
 | September 2026 | Customers choose manual form entry or AI-assisted form filling and always submit themselves; dispatchers gain PDF export and job setup flow. |
 | September 2026 | The Orchestrator is the central chat for all roles; it routes to the two agents or controlled manager analytics tools. |
 | September 2026 | MVP notifications poll every 30 seconds; WebSockets and mobile push are future work. |
-| September 2026 | Required operational, audit, notification, conversation, and pgvector indexes are now specified. |
+| September 2026 | Required operational, audit, notification, conversation, and pgvector indexes are specified. |
+| September 2026 | Vector dimension fixed at 1024 (BGE-M3); HNSW index chosen over ivfflat. |
+| October 2026 | Payment is business-facing: cost calculation and display only, no gateway, manual confirmation by the dispatcher, and an unpaid balance blocks new requests including emergencies. |
+| October 2026 | Technicians are company employees; for super urgent emergencies the dispatcher may record an external technician (name and phone only, no profile or login, no commission/ledger/review, manual labor cost, dispatcher-filled job report). Freelancer marketplace is future work. |
+| October 2026 | Location tracking is future work; distance is not a ranking factor; availability weight rises to 30% (normal) and 40% (emergency). |
+| October 2026 | `EMERGENCY` priority uses a simplified fast intake form; `URGENT` uses the normal detailed form. |
+| October 2026 | Schema v2 adopted as the single authority: 32 tables in 12 domains (the earlier "38" was a counting error). Dual hourly rate (`normal_rate`, `emergency_rate`); cash payment with invoice photo verification; commission tiers and technician ledger; technician applications and tier requests; assignment statuses `PENDING`, `ACCEPTED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `REJECTED`; ranking weights 30/30/15/15/10 (normal) and 30/40/15/10/5 (emergency); availability via `is_available`; no base price; the `roles`, `staff_profiles`, `technician_availability`, `job_parts`, `service_prices`, `ai_messages`, and `ai_tool_calls` tables removed. |
+| October 2026 | Decisions finalized: unpaid balance blocks normal and urgent requests but emergencies pass with a dispatcher flag; assessed urgency `HIGH` or `CRITICAL` escalates to emergency; manager approves technician applications and tier requests; the technician enters hours; extra visits are billed as one hour each; a dispatcher may confirm an invoice on a customer's behalf after 7 days; commission is charged only on payment confirmation; emergencies create their case at submission; actor columns are foreign keys; one commission charge per job; every attachment has exactly one parent; `contact_preference` is nullable; enum types are snake_case and timestamps are `timestamptz`; `ai_tool_calls`, correlation ID, idempotency key, and login/logout/AI-tool-call audit actions added (33 tables); the worker uses a short-lived run-scoped credential; local Ollama Qwen with the online Qwen API as fallback; one central chat with role-scoped routing; image analysis stays advisory until evaluated; verified-case text is de-identified before embedding; retention is 12 months for chats and images and 3 years for audit logs; storage is S3-compatible (RustFS locally, Cloudflare R2 free tier deployed); notifications poll every 30 seconds; a root npm workspace is added. |
+| October 2026 | Documentation reconciliation: `DB_Schema.md` is the schema authority; the worker has no database credentials (NestJS serves retrieval and stores ingested chunks); the dispatcher's feedback approval is the sole knowledge-promotion gate; customers cancel up to `ASSIGNED`, dispatchers `REJECT`; technician accept and start are separate steps; HNSW replaces ivfflat. |

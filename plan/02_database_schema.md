@@ -1,88 +1,47 @@
 # Database Schema Plan
 
-PostgreSQL is the single system of record. Prisma migrations define all schema changes. UUID primary keys, `created_at`, and `updated_at` are standard unless a record is immutable. Store lifecycle states as PostgreSQL/Prisma enums, not free text.
+The schema is defined by `apps/backend/prisma/schema.prisma` (Prisma 6, PostgreSQL 16 with pgvector) and described in full in [Data_Base_Plan/DB_Schema.md](../Data_Base_Plan/DB_Schema.md): **33 tables in 12 domains**. This file summarizes the decisions the rest of the plan depends on. If it disagrees with `DB_Schema.md`, that file wins.
 
-## Identity and Access
+## Standards
 
-| Table | Important columns | Relationships |
-| --- | --- | --- |
-| `users` | `id`, `email`, `password_hash`, `is_active`, `last_login_at` | One-to-one optional profile per role; many roles |
-| `roles` | `id`, `code` (`CUSTOMER`, `DISPATCHER`, `TECHNICIAN`, `MANAGER`) | Many users through `user_roles` |
-| `user_roles` | `user_id`, `role_id` | Unique `(user_id, role_id)` |
-| `customer_profiles` | `user_id`, `display_name`, `phone` | Owns addresses, equipment, requests |
-| `customer_addresses` | `customer_id`, address fields, `is_default` | Used by cases/jobs |
-| `technician_profiles` | `user_id`, `display_name`, `years_experience`, `hourly_rate`, `is_active` | Skills, availability, teams, assignments |
-<!-- Updated: staff profiles -->
-| `staff_profiles` | `user_id`, `display_name`, `phone` | Shared profile for dispatchers and managers; role distinction is owned by `user_roles`, with no separate dispatcher or manager profile table |
-| `teams` | `id`, `name`, `is_active` | Many technicians through `technician_teams` |
-| `technician_teams` | `technician_id`, `team_id` | Unique pair |
-| `skills` | `id`, `code`, `name`, `service_scope` | Many technicians and equipment/case requirements |
-| `technician_skills` | `technician_id`, `skill_id`, `proficiency_level` | Unique pair |
-| `technician_availability` | `technician_id`, `starts_at`, `ends_at`, `status` | Drives eligibility/ranking |
+- UUID v4 primary keys. Timestamps are `timestamptz` (UTC). Enum types are snake_case in the database. Money is `Decimal(10,2)`; ratings are `Decimal(3,2)`.
+- Roles are a `Role` enum on `user_roles`; there is no `roles` table. Dispatchers and managers have no profile table: names and phone live on `users`.
+- Fixed-value columns are enums, not free text. Only Prisma creates migrations; checks and indexes Prisma cannot express go in the raw SQL block of the `init` migration (see `DB_Schema.md`).
+- User IDs that record who acted (`assigned_by`, `changed_by`, `verified_by`, `dispatcher_id`, `reviewed_by`, `recorded_by`, the payment actors, `cancelled_by`, `created_by`) are foreign keys to `users`.
 
-## Core Maintenance Domain
+## Domains
 
-| Table | Important columns | Relationships |
-| --- | --- | --- |
-| `equipment_types` | `id`, `category`, `name`, `is_active` | Referenced by equipment |
-| `equipment` | `id`, `customer_id`, `equipment_type_id`, `brand`, `model`, `serial_number`, `location_note` | Optional link from request/case |
-<!-- Updated: emergency request path -->
-| `maintenance_requests` | `id`, `customer_profile_id`, `source` (`MANUAL`, `AI_ASSISTED`, `EMERGENCY_FORM`), `contact_preference VARCHAR` (`form` or `hotline`, emergency only), `status`, `priority`, raw report fields, `submitted_at` | One accepted request creates one case; emergency form requests require only description and location, bypass AI, and are immediately surfaced to dispatch |
-| `maintenance_cases` | `id`, `request_id`, `customer_id`, `address_id`, `equipment_id`, `category`, `urgency`, `safety_flags`, `status`, `summary`, `created_at` | Central operational record |
-| `case_status_history` | `case_id`, `from_status`, `to_status`, `actor_user_id`, `reason`, `created_at` | Append-only history |
-| `attachments` | `id`, `owner_user_id`, `request_id`, `case_id`, `object_key`, `media_type`, `size_bytes`, `scan_status` | Metadata only; object lives in storage |
-| `assignments` | `id`, `case_id`, `technician_profile_id`, `assigned_by_user_id`, `status`, `rank_snapshot`, `assigned_at` | Preserve recommendation/rationale snapshot |
-<!-- Updated: technician case feedback -->
-| `job_reports` | `id`, `assignment_id`, `technician_id`, `finding`, `work_performed`, `verified_outcome`, `completion_evidence`, `ai_analysis_was_helpful`, `completed_at` | One authoritative completion report per completed assignment; the technician records their own AI-helpfulness perspective |
-| `reviews` | `id`, `case_id`, `customer_id`, `rating`, `comment`, `submitted_at` | One review per eligible case/customer |
-| `notifications` | `id`, `user_id`, `type`, `payload`, `is_read`, `read_at` | Created by domain events |
-| `audit_logs` | `id`, `user_id`, `action`, `entity_type`, `entity_id`, `before_json`, `after_json`, `request_id`, `created_at` | Append-only critical-action trail |
+| Domain | Tables |
+| --- | --- |
+| 1 Users and Auth | `users`, `user_roles`, `refresh_tokens` |
+| 2 Customer Profiles | `customer_profiles` |
+| 3 Technician Profiles | `technician_profiles`, `technician_tier_requests` |
+| 4 Skills and Teams | `skills`, `teams`, `technician_skills`, `team_members` |
+| 5 Equipment and Addresses | `equipment_types`, `addresses`, `equipment` |
+| 6 Requests and Cases | `maintenance_requests`, `maintenance_cases`, `request_status_history`, `ai_conversations`, `ai_runs`, `ai_tool_calls` |
+| 7 Assignments and Jobs | `assignments`, `job_reports`, `job_costs` |
+| 8 Reviews and Feedback | `reviews`, `ai_feedback`, `case_feedback` |
+| 9 Notifications | `notifications` |
+| 10 Audit and Attachments | `audit_logs`, `attachments` |
+| 11 Knowledge Base | `knowledge_sources`, `knowledge_documents`, `knowledge_chunks` |
+| 12 Commission and Payouts | `commission_tiers`, `technician_ledger` |
 
-<!-- Updated: technician case feedback -->
-Optional tables remain out of the first migration unless a concrete workflow needs them: `maintenance_symptoms`, `maintenance_causes`, `case_evidence`, `job_parts`, `service_prices`, `job_costs`, and `technician_case_feedback`. When activated, `technician_case_feedback` is completed by the dispatcher after reviewing a completed job report; it records whether the AI prediction was accurate and whether the verified outcome is approved for RAG knowledge promotion.
+## Decisions that shape other plans
 
-## AI and Knowledge Domain
+- **Request and case:** a request (`maintenance_requests`) carries the lifecycle status and its history; a case (`maintenance_cases`) is the structured record, with `source` of `AI` or `MANUAL`. One request has at most one case.
+- **Lifecycle:** `NEW`, `UNDER_REVIEW`, `REQUIRES_FOLLOW_UP`, `APPROVED`, `ASSIGNED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `REJECTED`. Every change writes `request_status_history`.
+- **Vocabulary:** `request_priority` (`NORMAL`, `URGENT`, `EMERGENCY`) is customer-chosen. The case's `urgency_level` is `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`; an assessed `HIGH` or `CRITICAL` escalates the request to emergency handling.
+- **Assignments:** statuses `PENDING`, `ACCEPTED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `REJECTED`, with `scheduled_at`, `accepted_at`, `started_at`. Only one assignment per request may be `PENDING`, `ACCEPTED`, or `IN_PROGRESS`. External technicians are `is_external` rows with a name and phone and no profile.
+- **Ranking:** `assignments.ranking_snapshot` stores the ranked list at assignment time. Technician `normal_rate` and `emergency_rate` feed the rate factor; `is_available` plus active assignments feed availability.
+- **Money:** `job_costs` stores hours, the rate used and its `rate_type`, parts, labor, total, invoice status, and payment status. Hours and rate are null and `manual_labor_cost` is set for external technicians. There is no base price or service price table.
+- **Payment:** cash only, with an invoice photo stored in `attachments` (`INVOICE_PHOTO`). `customer_profiles.has_unpaid_balance` blocks normal and urgent requests; emergencies pass with a dispatcher flag.
+- **Commission:** `commission_tiers`, `technician_ledger`, and technician `outstanding_balance` and `is_payment_blocked` apply only to registered technicians.
+- **Feedback:** the dispatcher's `case_feedback.approved_for_knowledge` is the only knowledge-promotion gate.
+- **AI storage:** conversations keep messages as JSON; `ai_runs` stores run metrics, a correlation ID, and an idempotency key; `ai_tool_calls` records every controlled tool request.
+- **Vectors:** `knowledge_chunks.embedding` is `vector(1024)` (BGE-M3) with an HNSW cosine index, queried through `$queryRaw`. Chunk `metadata` JSON carries category, equipment type, and brand for filtering.
+- **Worker access:** the Python worker has no database credentials; NestJS serves retrieval and stores ingested chunks.
 
-| Table | Important columns | Relationships |
-| --- | --- | --- |
-| `ai_conversations` | `id`, `owner_user_id`, `role_context`, `case_id`, `status` | Contains messages and runs; technician conversations must link to a permitted case |
-| `ai_messages` | `id`, `conversation_id`, `sender_type`, `content`, `attachment_ids`, `created_at` | Preserve displayed conversation history |
-| `ai_runs` | `id`, `conversation_id`, `job_type`, `status`, `contract_version`, `input_hash`, `result_json`, `failure_code`, `started_at`, `finished_at` | Queue/run lifecycle and idempotency anchor |
-| `ai_tool_calls` | `id`, `ai_run_id`, `tool_name`, `requested_by_role`, `input_json`, `result_summary`, `status` | Audit each controlled tool request |
-| `ai_feedback` | `id`, `ai_run_id`, `actor_user_id`, `rating`, `correction`, `created_at` | Human feedback, never trusted knowledge by itself |
-| `knowledge_sources` | `id`, `source_type`, `title`, `provenance`, `status`, `approved_by_user_id` | Parent of documents |
-| `knowledge_documents` | `id`, `source_id`, `object_key`, `checksum`, `extracted_text_version`, `status` | Source document or approved case representation |
-| `knowledge_chunks` | `id`, `document_id`, `content`, `chunk_index`, `embedding`, `metadata_json`, `is_active` | Queryable RAG chunks |
+## Schema risks
 
-## Critical Relationships and Constraints
-
-- `maintenance_requests` has at most one `maintenance_cases` row. A customer-approved AI draft becomes a request before it becomes a case.
-- Only the currently active assignment can move a case from `ASSIGNED` to `IN_PROGRESS` or `COMPLETED`.
-- `case_status_history` is written in the same transaction as a case status change.
-- `job_reports.verified_outcome` is immutable after completion except through an audited correction workflow.
-- `reviews` has unique `(case_id, customer_id)`.
-- Every stored attachment has one owning user and one permitted domain parent. Do not rely on object names as authorization.
-- `ai_runs` needs an idempotency key such as `(job_type, input_hash, active status)` to avoid duplicate worker effects.
-
-## pgvector Note
-
-Enable the PostgreSQL `vector` extension in a Prisma migration. Store one embedding vector per `knowledge_chunks` row using the dimension required by the selected local embedding model. Add an approximate-nearest-neighbor vector index only after that model and dimension are fixed. Keep metadata columns for source ID, category, equipment type, safety level, and approval status so retrieval can filter before similarity ranking.
-
-## Required Indexes
-
-<!-- Updated: database indexes -->
-
-| Table | Index | Purpose |
-| --- | --- | --- |
-| `maintenance_requests` | `customer_profile_id`, `status`, `priority` | Customer history and dispatcher queue filtering |
-| `assignments` | `technician_profile_id`, `status` | Technician workload and active-assignment lookups |
-| `ai_messages` | `conversation_id` | Ordered conversation retrieval |
-| `audit_logs` | `user_id`; composite `(entity_type, entity_id)` | Actor and entity audit trails |
-| `notifications` | composite `(user_id, is_read)` | Unread notification polling |
-| `knowledge_chunks` | `embedding` using pgvector `ivfflat` cosine index | Filtered similarity retrieval after the embedding dimension is fixed |
-
-## Schema Risks
-
-- Confirm the embedding model before generating the vector column dimension; changing it later requires re-embedding all chunks.
-- `rank_snapshot` must capture input factors and weights at assignment time, not merely the winning technician ID, to make recommendations auditable.
-- Define retention and deletion rules for images, chat records, and audit logs before production data is collected.
+- `has_unpaid_balance` is a single flag and must be recomputed across all of a customer's unpaid jobs, not toggled.
+- Retention, deletion on request, and the verified-case de-identification pipeline are decided (see `plan/07_security_plan.md`) but not yet implemented.
