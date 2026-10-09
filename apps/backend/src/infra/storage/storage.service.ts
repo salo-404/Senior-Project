@@ -175,9 +175,14 @@ export class StorageService {
   // ---------------------------------------------------------------- helpers
 
   private async findAccessible(attachmentId: string, user: AuthenticatedUser) {
-    const attachment = await this.prisma.attachment.findUnique({ where: { id: attachmentId } });
+    const attachment = await this.prisma.attachment.findUnique({
+      where: { id: attachmentId },
+      include: { request: { select: { customer_id: true } } },
+    });
     const isStaff = user.roles.includes(Role.DISPATCHER) || user.roles.includes(Role.MANAGER);
-    if (!attachment || !(attachment.user_id === user.id || isStaff)) {
+    // The customer who owns the request can open every photo on it, including ones added by staff later.
+    const ownsRequest = attachment?.request?.customer_id === user.id;
+    if (!attachment || !(attachment.user_id === user.id || isStaff || ownsRequest)) {
       throw new NotFoundException('Attachment not found');
     }
     return attachment;

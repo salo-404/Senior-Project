@@ -11,6 +11,10 @@ import { PrismaModule } from './infra/prisma/prisma.module';
 import { QueueModule } from './infra/queue/queue.module';
 import { SafetyModule } from './infra/safety/safety.module';
 import { StorageModule } from './infra/storage/storage.module';
+import { AddressesModule } from './modules/addresses/addresses.module';
+import { CasesModule } from './modules/cases/cases.module';
+import { EquipmentModule } from './modules/equipment/equipment.module';
+import { RequestsModule } from './modules/requests/requests.module';
 import { TechniciansModule } from './modules/technicians/technicians.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -49,6 +53,10 @@ import { UsersModule } from './modules/users/users.module';
     StorageModule,
     UsersModule,
     TechniciansModule,
+    AddressesModule,
+    EquipmentModule,
+    CasesModule,
+    RequestsModule,
     NotificationsModule,
     AuthModule,
   ],

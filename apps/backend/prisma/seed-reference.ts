@@ -1,5 +1,5 @@
 /**
- * Loads the reference data the technician signup form and approval need: the skill catalogue and the
+ * Loads the reference data the app needs: equipment types, the skill catalogue and the
  * three commission tiers. Idempotent (upserts by name) and never overwrites values a manager changed.
  *
  *   npm run seed:reference
@@ -25,16 +25,30 @@ const SKILLS = [
   { name: 'Dishwasher repair', category: MaintenanceCategory.HOME_APPLIANCES },
 ];
 
+const EQUIPMENT_TYPES = [
+  { name: 'Split air conditioner', category: MaintenanceCategory.HVAC },
+  { name: 'Central air conditioning', category: MaintenanceCategory.HVAC },
+  { name: 'Window air conditioner', category: MaintenanceCategory.HVAC },
+  { name: 'Refrigerator', category: MaintenanceCategory.HOME_APPLIANCES },
+  { name: 'Washing machine', category: MaintenanceCategory.HOME_APPLIANCES },
+  { name: 'Dishwasher', category: MaintenanceCategory.HOME_APPLIANCES },
+];
+
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
   try {
+    // equipment_types.name is not unique, so look it up by name + category first.
+    for (const t of EQUIPMENT_TYPES) {
+      const found = await prisma.equipmentType.findFirst({ where: { name: t.name, category: t.category } });
+      if (!found) await prisma.equipmentType.create({ data: t });
+    }
     for (const t of TIERS) {
       await prisma.commissionTier.upsert({ where: { name: t.name }, update: {}, create: t });
     }
     for (const s of SKILLS) {
       await prisma.skill.upsert({ where: { name: s.name }, update: {}, create: s });
     }
-    console.log(`Reference data ready: ${TIERS.length} commission tiers, ${SKILLS.length} skills.`);
+    console.log(`Reference data ready: ${TIERS.length} commission tiers, ${SKILLS.length} skills, ${EQUIPMENT_TYPES.length} equipment types.`);
   } finally {
     await prisma.$disconnect();
   }
