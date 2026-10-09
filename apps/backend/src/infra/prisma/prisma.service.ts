@@ -16,6 +16,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * so several modules can write in the same transaction.
    */
   runInTransaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-    return this.$transaction((tx) => fn(tx));
+    // Prisma closes an interactive transaction after 5 s by default. A far-away database (e.g. a hosted
+    // Neon server) can need longer; set DB_TRANSACTION_TIMEOUT_MS to raise it. Unset keeps Prisma's default.
+    const timeout = Number(process.env.DB_TRANSACTION_TIMEOUT_MS);
+    return this.$transaction((tx) => fn(tx), timeout > 0 ? { timeout, maxWait: timeout } : undefined);
   }
 }
