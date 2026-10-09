@@ -368,8 +368,9 @@ describe('maintAIn backend (e2e, AI_ENABLED=false, throwaway database)', () => {
       expect(await prisma.user.findUnique({ where: { email: `role-${role}@test.dev` } })).toBeNull();
     });
 
-    it('technician registration answers 501 until the technicians module exists', async () => {
-      await http().post(`${API}/auth/register/technician`).send({}).expect(501);
+    it('technician registration validates its application template (an empty body is a 400)', async () => {
+      const res = await http().post(`${API}/auth/register/technician`).send({}).expect(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('rejects unknown fields and bad input with VALIDATION_ERROR', async () => {

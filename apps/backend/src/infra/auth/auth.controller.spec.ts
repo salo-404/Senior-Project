@@ -5,6 +5,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { ErrorFilter } from '../../common/error.filter';
+import { TechniciansService } from '../../modules/technicians/technicians.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 
@@ -16,13 +17,18 @@ describe('AuthController (rate limit, validation, cookie)', () => {
     register: jest.fn(),
     logout: jest.fn(),
   };
+  const technicians = { registerApplicant: jest.fn() };
 
   beforeAll(async () => {
     delete process.env.LOGIN_RATE_LIMIT; // use the default of 5 per minute
     const moduleRef = await Test.createTestingModule({
       imports: [ThrottlerModule.forRoot({ throttlers: [{ name: 'default', ttl: 60_000, limit: 1000 }] })],
       controllers: [AuthController],
-      providers: [{ provide: AuthService, useValue: auth }, { provide: APP_GUARD, useClass: ThrottlerGuard }],
+      providers: [
+        { provide: AuthService, useValue: auth },
+        { provide: TechniciansService, useValue: technicians },
+        { provide: APP_GUARD, useClass: ThrottlerGuard },
+      ],
     }).compile();
     app = moduleRef.createNestApplication();
     app.use(cookieParser());
@@ -56,9 +62,10 @@ describe('AuthController (rate limit, validation, cookie)', () => {
     expect(auth.register).not.toHaveBeenCalled();
   });
 
-  it('returns 501 for technician registration until the technicians module exists', async () => {
-    const res = await request(app.getHttpServer()).post('/api/v1/auth/register/technician').send({}).expect(501);
-    expect(res.body.error.code).toBe('NOT_IMPLEMENTED');
+  it('validates the technician application template before calling the technicians module', async () => {
+    const res = await request(app.getHttpServer()).post('/api/v1/auth/register/technician').send({}).expect(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(technicians.registerApplicant).not.toHaveBeenCalled();
   });
 });
 
@@ -70,7 +77,10 @@ describe('AuthController login cookie', () => {
     process.env.LOGIN_RATE_LIMIT = '1000';
     const moduleRef = await Test.createTestingModule({
       controllers: [AuthController],
-      providers: [{ provide: AuthService, useValue: auth }],
+      providers: [
+        { provide: AuthService, useValue: auth },
+        { provide: TechniciansService, useValue: {} },
+      ],
     }).compile();
     app = moduleRef.createNestApplication();
     app.use(cookieParser());
