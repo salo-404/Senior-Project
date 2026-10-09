@@ -12,6 +12,7 @@ import { QueueModule } from './infra/queue/queue.module';
 import { SafetyModule } from './infra/safety/safety.module';
 import { StorageModule } from './infra/storage/storage.module';
 import { AddressesModule } from './modules/addresses/addresses.module';
+import { AssignmentsModule } from './modules/assignments/assignments.module';
 import { CasesModule } from './modules/cases/cases.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { RequestsModule } from './modules/requests/requests.module';
@@ -57,6 +58,7 @@ import { UsersModule } from './modules/users/users.module';
     EquipmentModule,
     CasesModule,
     RequestsModule,
+    AssignmentsModule,
     NotificationsModule,
     AuthModule,
   ],

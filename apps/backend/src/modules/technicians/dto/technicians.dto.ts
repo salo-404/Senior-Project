@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDefined,
   IsEnum,
   IsIn,
@@ -88,6 +89,11 @@ export class DecideApplicationDto {
 
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(1) @Max(10000)
   emergency_rate?: number;
+}
+
+export class SetAvailabilityDto {
+  @IsBoolean()
+  is_available!: boolean;
 }
 
 export class ListApplicationsQuery extends PaginationQuery {

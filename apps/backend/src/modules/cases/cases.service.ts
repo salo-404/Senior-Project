@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
+  AssignmentStatus,
   AuditAction,
   NotificationPriority,
   NotificationType,
@@ -227,9 +228,8 @@ export class CasesService {
 
   /** Allowed from NEW, UNDER_REVIEW, REQUIRES_FOLLOW_UP, APPROVED and ASSIGNED; never once work has started. */
   async cancel(user: AuthenticatedUser, id: string, dto: CancelCaseDto) {
-    await this.prisma.runInTransaction(async (tx) => {
+    const releasedTechnicians = await this.prisma.runInTransaction(async (tx) => {
       await this.findOwnedForUpdate(tx, user, id);
-      // TODO(stage 3): when the case is ASSIGNED, also cancel its active assignment in this transaction.
       await this.lifecycle.transition(tx, {
         requestId: id,
         to: RequestStatus.CANCELLED,
@@ -238,8 +238,36 @@ export class CasesService {
         data: { cancellation_reason: dto.reason, cancelled_by: user.id },
         auditAction: AuditAction.REQUEST_CANCELLED,
       });
+
+      // An ASSIGNED case has a PENDING or ACCEPTED assignment: cancel it in the same transaction.
+      const open = await tx.assignment.findMany({
+        where: { request_id: id, status: { in: [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED] } },
+        select: { id: true, technician: { select: { user_id: true } } },
+      });
+      for (const assignment of open) {
+        await tx.assignment.update({ where: { id: assignment.id }, data: { status: AssignmentStatus.CANCELLED } });
+        await this.audit.log(
+          {
+            actorId: user.id,
+            action: AuditAction.ASSIGNMENT_CANCELLED,
+            entityType: 'assignment',
+            entityId: assignment.id,
+            oldValue: { request_status: 'ASSIGNED' },
+            newValue: { reason: 'Customer cancelled the case' },
+          },
+          tx,
+        );
+      }
+      return open.flatMap((a) => (a.technician ? [a.technician.user_id] : []));
     });
 
+    for (const technicianUserId of releasedTechnicians) {
+      await this.notifications.notify(technicianUserId, NotificationType.REQUEST_STATUS_CHANGED, {
+        title: 'An assignment was cancelled',
+        body: 'The customer cancelled the case.',
+        requestId: id,
+      });
+    }
     await this.notifications.notifyRole(Role.DISPATCHER, NotificationType.REQUEST_STATUS_CHANGED, {
       title: 'A customer cancelled a case',
       body: dto.reason,

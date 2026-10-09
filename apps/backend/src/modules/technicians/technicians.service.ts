@@ -279,6 +279,41 @@ export class TechniciansService {
     return this.get(id);
   }
 
+  // ---------------------------------------------------------------- availability
+
+  /**
+   * The is_available switch. Only an APPROVED technician has one to flip. A technician can change their own;
+   * a dispatcher can change anyone's. Another technician's profile is a 404 so its existence is not revealed.
+   */
+  async setAvailability(actor: AuthenticatedUser, profileId: string, isAvailable: boolean) {
+    const isDispatcher = actor.roles.includes(Role.DISPATCHER);
+    const profile = await this.prisma.technicianProfile.findFirst({
+      where: { id: profileId, ...(isDispatcher ? {} : { user_id: actor.id }) },
+      select: { id: true, profile_status: true, is_available: true },
+    });
+    if (!profile) throw new NotFoundException('Technician not found');
+    if (profile.profile_status !== ProfileStatus.APPROVED) {
+      throw new AppException('NOT_APPROVED', 'Availability can be set once the application is approved', 409);
+    }
+    if (profile.is_available === isAvailable) return { id: profile.id, is_available: isAvailable };
+
+    await this.prisma.runInTransaction(async (tx) => {
+      await tx.technicianProfile.update({ where: { id: profile.id }, data: { is_available: isAvailable } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: AuditAction.USER_UPDATED,
+          entityType: 'technician_profile',
+          entityId: profile.id,
+          oldValue: { is_available: profile.is_available },
+          newValue: { is_available: isAvailable },
+        },
+        tx,
+      );
+    });
+    return { id: profile.id, is_available: isAvailable };
+  }
+
   // ---------------------------------------------------------------- skills and status port
 
   listSkills() {

@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from 
 import { Role } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/authenticated-user';
 import { CurrentUser, Public, Roles } from '../../infra/auth/decorators';
-import { DecideApplicationDto, ListApplicationsQuery, ReapplyDto } from './dto/technicians.dto';
+import { DecideApplicationDto, ListApplicationsQuery, ReapplyDto, SetAvailabilityDto } from './dto/technicians.dto';
 import { TechniciansService } from './technicians.service';
 
 @Controller()
@@ -26,6 +26,17 @@ export class TechniciansController {
   @Post('technician-applications/reapply')
   reapply(@CurrentUser() actor: AuthenticatedUser, @Body() dto: ReapplyDto) {
     return this.technicians.reapply(actor, dto);
+  }
+
+  /** The availability switch. A technician flips their own; a dispatcher can flip anyone's. */
+  @Roles(Role.TECHNICIAN, Role.DISPATCHER)
+  @Patch('technicians/:id/availability')
+  setAvailability(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetAvailabilityDto,
+  ) {
+    return this.technicians.setAvailability(actor, id, dto.is_available);
   }
 
   @Roles(Role.MANAGER)
