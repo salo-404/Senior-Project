@@ -23,7 +23,7 @@ describe('Stage 2: manual customer-to-dispatcher case workflow (e2e, throwaway d
   async function createUser(key: string, role: Role) {
     const user = await prisma.user.create({
       data: {
-        email: `${key}@test.dev`,
+        email: `${key.toLowerCase()}@test.dev`,
         password_hash: await hashPassword(PASSWORD),
         first_name: key,
         last_name: role,
@@ -33,7 +33,7 @@ describe('Stage 2: manual customer-to-dispatcher case workflow (e2e, throwaway d
       },
     });
     ids[key] = user.id;
-    const res = await http().post(`${API}/auth/login`).send({ email: `${key}@test.dev`, password: PASSWORD }).expect(200);
+    const res = await http().post(`${API}/auth/login`).send({ email: `${key.toLowerCase()}@test.dev`, password: PASSWORD }).expect(200);
     tokens[key] = res.body.accessToken;
   }
 
