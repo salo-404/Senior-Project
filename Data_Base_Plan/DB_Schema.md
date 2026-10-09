@@ -1,6 +1,6 @@
-# maintAIn Database Schema (v2)
+# maintAIn Database Schema (v4.2)
 
-Describes the schema implemented in `apps/backend/prisma/schema.prisma` and the `init` migration. If this file and `schema.prisma` ever disagree, fix whichever is wrong in the same change.
+Last updated: 2026-10-08. Describes the schema implemented in `apps/backend/prisma/schema.prisma` and its migrations (`init`, `schema_v4_fixes`, `schema_v4_1_auth_and_summary`, `schema_v4_2_audit_and_activation_index`). If this file and `schema.prisma` ever disagree, fix whichever is wrong in the same change.
 
 ## 1. Overview
 
@@ -15,9 +15,10 @@ Describes the schema implemented in `apps/backend/prisma/schema.prisma` and the 
 | Timestamps | `timestamptz` (UTC) |
 | Money | `Decimal(10,2)` |
 | Ratings | `Decimal(3,2)` |
+| Commission rates | `Decimal(5,2)` |
 | Maintenance categories | `HVAC`, `HOME_APPLIANCES` |
 
-The 38 in earlier drafts was a counting error: tables dropped during redesign were never subtracted. The 33rd table, `ai_tool_calls`, was added after the schema review.
+The 38 in earlier drafts was a counting error: tables dropped during redesign were never subtracted. The 33rd table, `ai_tool_calls`, was added after the schema review. v4 adds columns and indexes only, so the count stays at 33.
 
 ## 2. Global rules
 
@@ -59,7 +60,7 @@ The 38 in earlier drafts was a counting error: tables dropped during redesign we
 | `NotificationType` | `REQUEST_SUBMITTED`, `REQUEST_STATUS_CHANGED`, `ASSIGNMENT_CREATED`, `ASSIGNMENT_ACCEPTED`, `JOB_STARTED`, `JOB_COMPLETED`, `INVOICE_SUBMITTED`, `PAYMENT_CONFIRMED`, `PAYMENT_DISPUTED`, `SAFETY_ESCALATED`, `COMMISSION_CHARGED`, `TIER_CHANGED`, `SYSTEM` |
 | `ToolCallStatus` | `SUCCESS`, `FAILED`, `UNAUTHORIZED` |
 | `NotificationPriority` | `NORMAL`, `HIGH`, `URGENT` |
-| `AuditAction` | `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `USER_CREATED`, `USER_UPDATED`, `USER_DEACTIVATED`, `PASSWORD_CHANGED`, `REQUEST_CREATED`, `REQUEST_STATUS_CHANGED`, `REQUEST_CANCELLED`, `CASE_VERIFIED`, `CASE_CREATED_MANUAL`, `ASSIGNMENT_CREATED`, `ASSIGNMENT_ACCEPTED`, `ASSIGNMENT_STARTED`, `ASSIGNMENT_REJECTED`, `ASSIGNMENT_CANCELLED`, `JOB_REPORT_SUBMITTED`, `INVOICE_CONFIRMED_BY_CUSTOMER`, `INVOICE_DISPUTED`, `INVOICE_CONFIRMED_ON_BEHALF`, `INVOICE_PHOTO_SUBMITTED`, `PAYMENT_CONFIRMED`, `PAYMENT_DISPUTED`, `TECHNICIAN_APPROVED`, `TECHNICIAN_REJECTED`, `TIER_CHANGED`, `COMMISSION_CHARGED`, `COMMISSION_PAYMENT_RECORDED`, `KNOWLEDGE_PROMOTED`, `AI_TOOL_CALL`, `SAFETY_ESCALATED`, `EMERGENCY_DOWNGRADED` |
+| `AuditAction` | `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `USER_CREATED`, `USER_UPDATED`, `USER_DEACTIVATED`, `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, `PASSWORD_CHANGED`, `REQUEST_CREATED`, `REQUEST_STATUS_CHANGED`, `REQUEST_CANCELLED`, `CASE_VERIFIED`, `CASE_CREATED_MANUAL`, `CASE_CONFIRMED_BY_CUSTOMER`, `ASSIGNMENT_CREATED`, `ASSIGNMENT_ACCEPTED`, `ASSIGNMENT_STARTED`, `ASSIGNMENT_REJECTED`, `ASSIGNMENT_CANCELLED`, `JOB_REPORT_SUBMITTED`, `INVOICE_CONFIRMED_BY_CUSTOMER`, `INVOICE_DISPUTED`, `INVOICE_CONFIRMED_ON_BEHALF`, `INVOICE_PHOTO_SUBMITTED`, `PAYMENT_CONFIRMED`, `PAYMENT_DISPUTED`, `TECHNICIAN_APPROVED`, `TECHNICIAN_REJECTED`, `TIER_CHANGED`, `COMMISSION_CHARGED`, `COMMISSION_PAYMENT_RECORDED`, `ATTACHMENT_DELETED`, `KNOWLEDGE_PROMOTED`, `AI_TOOL_CALL`, `SAFETY_ESCALATED`, `EMERGENCY_DOWNGRADED` |
 
 ## 4. Tables
 
@@ -67,7 +68,7 @@ Unless a column is marked optional (`?`), it is `NOT NULL`. Every table has `cre
 
 ### Domain 1: Users and Auth
 
-- **`users`**: `email` (unique), `phone?` (unique), `password_hash`, `first_name`, `last_name`, `is_active` (default true). Dispatchers and managers have no profile table.
+- **`users`**: `email` (unique), `phone?` (unique), `password_hash`, `first_name`, `last_name`, `is_active` (default true), `activation_token_hash?` (unique), `activation_expires_at?`. Dispatchers and managers have no profile table. Staff accounts are invite-only (see Business rules).
 - **`user_roles`**: `(user_id, role)` composite key; a user may hold several roles.
 - **`refresh_tokens`**: `user_id`, `token_hash` (unique), `expires_at`, `is_revoked` (default false). Index on `user_id`.
 
@@ -77,7 +78,7 @@ Unless a column is marked optional (`?`), it is `NOT NULL`. Every table has `cre
 
 ### Domain 3: Technician Profiles
 
-- **`technician_profiles`**: `user_id` (unique), `bio?`, `years_of_experience`, `rating` (0-5), `total_reviews`, `profile_status` (default `PENDING_REVIEW`), `current_tier_id?` (-> `commission_tiers`), `outstanding_balance`, `is_payment_blocked`, `is_available` (default true), `normal_rate`, `emergency_rate`.
+- **`technician_profiles`**: `user_id` (unique), `bio?`, `years_of_experience`, `rating` (0-5), `total_reviews`, `profile_status` (default `PENDING_REVIEW`), `current_tier_id?` (-> `commission_tiers`), `outstanding_balance`, `is_payment_blocked`, `is_available` (default true), `normal_rate`, `emergency_rate`, `weekly_schedule?` (JSON: `{ "mon": [{"from":"08:00","to":"17:00"}], "tue": [...], ... }`; null means no schedule set, treated as always available while `is_available = true`).
 - **`technician_tier_requests`**: `technician_profile_id`, `request_type`, `proposed_tier_id?`, `supporting_notes?`, `status`, `decision_outcome?`, `final_tier_id?`, `reviewed_by?`, `review_notes?`.
 
 ### Domain 4: Skills and Teams
@@ -95,8 +96,8 @@ Unless a column is marked optional (`?`), it is `NOT NULL`. Every table has `cre
 
 ### Domain 6: Requests and Cases
 
-- **`maintenance_requests`**: `customer_id`, `equipment_id`, `address_id`, `title`, `description?`, `priority` (default `NORMAL`), `status` (default `NEW`), `ai_analysis_status` (default `PENDING`), `problem_type?`, `intake_answers?` (JSON), `is_safety_escalated`, `escalated_at?`, `escalation_reason?`, `rejection_reason?`, `cancellation_reason?`, `cancelled_by?`, `contact_preference?` (set only for emergencies). Indexes: customer, status, priority, ai_analysis_status.
-- **`maintenance_cases`**: `request_id` (unique), `source`, `summary?`, `urgency_level?`, `safety_flags?`, `symptoms?`, `follow_up_questions?`, `possible_causes?` (all JSON), `verified_by?`, `verified_at?`.
+- **`maintenance_requests`**: `customer_id`, `equipment_id`, `address_id`, `title`, `description?`, `priority` (default `NORMAL`), `status` (default `NEW`), `ai_analysis_status` (default `PENDING`), `problem_type?`, `intake_answers?` (JSON), `is_safety_escalated`, `escalated_at?`, `escalation_reason?`, `rejection_reason?`, `cancellation_reason?`, `cancelled_by?`, `contact_preference?` (set only for emergencies), `language?` (e.g. `en`, `ar`, `ar-LB`, `ar-latn`; detected from the first answer or chosen by the customer; case text is stored in English), `customer_had_unpaid_balance` (default false; set at submission so the dispatcher sees the unpaid-balance flag on emergency requests without recomputing it). Indexes: customer, status, priority, ai_analysis_status, `(equipment_id, created_at)` (repeat-problem detector).
+- **`maintenance_cases`**: `request_id` (unique), `source`, `summary?`, `urgency_level?`, `safety_flags?`, `symptoms?`, `follow_up_questions?`, `possible_causes?` (all JSON), `verified_by?`, `verified_at?`, `customer_confirmed_at?`, `customer_note?`.
 - **`request_status_history`**: `request_id`, `from_status?`, `to_status`, `changed_by`, `reason?`. Written in the same transaction as every status change. Index on `request_id`.
 - **`ai_conversations`**: `request_id?` (set when a draft is submitted), `user_id`, `role`, `messages` (JSON). Index on `user_id`.
 - **`ai_runs`**: `conversation_id?`, `request_id?`, `agent_type`, `model_name?`, `prompt_tokens?`, `completion_tokens?`, `latency_ms?`, `status` (default `PENDING`), `error_message?`, `correlation_id` (database-generated UUID), `idempotency_key?`. A partial unique index allows one `PENDING` or `IN_PROGRESS` run per idempotency key.
@@ -126,7 +127,7 @@ Rules: a request is the raw submission and a case is the structured record; a re
 
 - **`assignments`**: `request_id`, `technician_profile_id?`, `is_external`, `external_name?`, `external_phone?`, `assigned_by`, `status` (default `PENDING`), `rejection_reason?`, `delay_reason?`, `scheduled_at?`, `accepted_at?`, `started_at?`, `expected_return_at?`, `visit_count` (default 1), `ranking_snapshot?` (JSON). Indexes: request, technician, status.
 - **`job_reports`**: `assignment_id` (unique), `diagnosis?`, `work_done?`, `parts_used?` (JSON list of name, quantity, unit cost), `ai_analysis_was_helpful?`, `notes?`, `submitted_at?`.
-- **`job_costs`**: `assignment_id` (unique), `hours_worked?`, `hourly_rate_used?`, `rate_type?`, `extra_visits`, `manual_labor_cost?`, `parts_cost`, `labor_cost`, `total_cost`, `invoice_status`, `customer_confirmed_at?`, `confirmed_on_behalf_by?`, `dispute_reason?`, `payment_status`, `payment_method` (default `CASH`), `invoice_submitted_at?`, `invoice_submitted_by?`, `payment_confirmed_by?`, `payment_confirmed_at?`.
+- **`job_costs`**: `assignment_id` (unique), `hours_worked?`, `hourly_rate_used?`, `rate_type?`, `extra_visits`, `manual_labor_cost?`, `is_visit_fee_only` (default false), `parts_cost`, `labor_cost`, `total_cost`, `invoice_lines?` (JSON), `invoice_status`, `customer_confirmed_at?`, `confirmed_on_behalf_by?`, `dispute_reason?`, `payment_status`, `payment_method` (default `CASH`), `invoice_submitted_at?`, `invoice_submitted_by?`, `payment_confirmed_by?`, `payment_confirmed_at?`. Index on `(invoice_status, payment_status)`.
 
 Assignment rules: only dispatchers create assignments; AI recommends nothing it computes itself. Normal jobs use registered technicians; an external technician is allowed only for emergencies when no internal technician is available, has no profile or login, and the assignment is for tracking. When `is_external = true`, `external_name` and `external_phone` are required and `technician_profile_id` is null. Only one assignment per request may be `PENDING`, `ACCEPTED`, or `IN_PROGRESS`. A technician rejection marks the assignment `REJECTED` and returns the request to `APPROVED`. External jobs get no review, commission, or ledger entry, and the dispatcher fills the job report from a phone call.
 
@@ -150,7 +151,7 @@ Rules: one review per completed request, only by its customer, never for externa
 
 ### Domain 9: Notifications
 
-- **`notifications`**: `user_id`, `notification_type`, `priority` (default `NORMAL`), `title`, `body`, `data?` (JSON), `request_id?`, `is_read`, `read_at?`. Index `(user_id, is_read)`.
+- **`notifications`**: `user_id`, `notification_type`, `priority` (default `NORMAL`), `title`, `body`, `data?` (JSON), `request_id?` (-> `maintenance_requests`, `ON DELETE SET NULL`), `is_read`, `read_at?`. Indexes: `(user_id, is_read)`, `(user_id, created_at)`.
 
 Emergency requests notify all dispatchers (`SAFETY_ESCALATED`, `URGENT`), and include the customer's unpaid balance when there is one. Notifications are never deleted. MVP delivery polls every 30 seconds.
 
@@ -169,8 +170,8 @@ Knowledge promotion: technician submits the job report, the dispatcher completes
 
 ### Domain 12: Commission and Payouts
 
-- **`commission_tiers`**: `name` (unique), `commission_rate` (e.g. 0.10), `min_rating?`, `min_experience_years?`, `min_completed_jobs?`.
-- **`technician_ledger`**: `technician_profile_id`, `entry_type`, `amount`, `balance_after`, `job_cost_id?`, `tier_id_at_charge?`, `rate_applied?`, `recorded_by?`, `payment_note?`.
+- **`commission_tiers`**: `name` (unique), `commission_rate` (`Decimal(5,2)`, a percentage: `10.00` = 10%), `min_rating?`, `min_experience_years?`, `min_completed_jobs?`.
+- **`technician_ledger`**: `technician_profile_id`, `entry_type`, `amount`, `balance_after`, `job_cost_id?`, `tier_id_at_charge?`, `rate_applied?` (`Decimal(5,2)`), `recorded_by?`, `payment_note?`.
 
 Commission applies to registered technicians only, on `labor_cost` (parts excluded), and is charged only when payment is confirmed: not on job completion and not on invoice confirmation. A partial unique index allows one `COMMISSION_CHARGE` per `job_cost_id`. A manager records payments received.
 
@@ -187,6 +188,16 @@ Dispatcher or manager reviews the photo
 ```
 
 Rules: cash only, no gateway; the photo is required before `CONFIRMED`; only a dispatcher or manager confirms or disputes; `DISPUTED` blocks the customer like `PENDING`. `customer_profiles.has_unpaid_balance` is recomputed from all of the customer's jobs: true when any job has `invoice_status = CONFIRMED` and `payment_status != CONFIRMED`. While true, the customer cannot submit a normal or urgent request. An emergency request is still accepted, and the dispatcher is shown the unpaid balance as a flag.
+
+### Business rules
+
+| Rule | Detail |
+| --- | --- |
+| Invoice lines | `job_costs.invoice_lines` holds the exact lines the customer confirms, as an array of `{ kind, description, amountCents }` where `kind` is `LABOR`, `EXTRA_VISIT`, `PART`, or `VISIT_FEE`. The column is nullable in the database; the service must set it when the invoice is submitted, and the lines are not edited afterwards. |
+| Visit fee after a cancellation | When an assignment ends `CANCELLED` after the technician was dispatched, a visit-fee-only `job_costs` row may hang off it: `is_visit_fee_only = true`, `hours_worked = 1`, `hourly_rate_used` = the technician's rate for the request priority, `rate_type` set, `extra_visits = 0` (so `job_costs_billing_source_check` still passes). It goes through the same invoice confirmation, payment confirmation, and commission flow, with commission charged on the fee. Service logic is not implemented yet. |
+| Commission rate range | `commission_tiers.commission_rate` and `technician_ledger.rate_applied` are `Decimal(5,2)` (maximum 999.99), so a rate of 10.00 (10%) fits. Rates are percentages everywhere: `10.00` means 10%, never `0.10`. Ratings stay `Decimal(3,2)`. |
+| Invite-only staff accounts | Dispatcher, technician, and manager accounts are never self-registered. A manager creates the user with `is_active = false`, and the backend issues a one-time activation link. Only the hash of the token is stored in `users.activation_token_hash`, and `activation_expires_at` is set 48 hours after issue. Activation looks the user up by the unique hash, sets the password, sets `is_active = true`, and clears both columns. An expired or used link is rejected, and the manager can issue a new one. `USER_CREATED` (invite) and `ACCOUNT_ACTIVATED` (activation) are audited; a staff role change is audited as `USER_ROLE_CHANGED`. |
+| Customer-confirmed summary | The customer may confirm the AI summary of their case or write a correction in `maintenance_cases.customer_note`; `customer_confirmed_at` records when, and `CASE_CONFIRMED_BY_CUSTOMER` is audited. A correction never lowers `urgency_level` or removes `safety_flags`; the dispatcher still decides. |
 
 ## 6. Ranking reference
 
@@ -213,11 +224,38 @@ Rate score: `1 - (rate - min) / (max - min)` across candidates; `1.0` for all wh
 7. HNSW index `knowledge_chunks_embedding_hnsw` with `vector_cosine_ops`.
 8. Decisions (part of the single `20261005000000_init` migration): `assignments_external_check` made two-sided; partial unique index `technician_ledger_one_commission_per_job`; check `attachments_one_parent_check`; partial unique index `ai_runs_one_inflight_per_key`; enum types renamed to snake_case; timestamps converted to `timestamptz`; foreign keys added to the actor columns.
 
+### v4 migration (`schema_v4_fixes`)
+
+1. `commission_tiers.commission_rate` and `technician_ledger.rate_applied` altered to `Decimal(5,2)` (widening, no data loss). Checks `commission_tiers_rate_range_check` and `technician_ledger_rate_applied_range_check` keep rates between 0 and 99.99, since `Decimal(5,2)` alone would allow up to 999.99.
+2. New columns: `job_costs.invoice_lines`, `job_costs.is_visit_fee_only`, `technician_profiles.weekly_schedule`, `maintenance_requests.language`, `maintenance_requests.customer_had_unpaid_balance`.
+3. New indexes: `maintenance_requests(equipment_id, created_at)`, `job_costs(invoice_status, payment_status)`, `notifications(user_id, created_at)`.
+4. `notifications.request_id` foreign key is `ON DELETE SET NULL`. The `init` migration already created it that way (Prisma's default for an optional relation); v4 states it explicitly in `schema.prisma` and adds no SQL for it.
+
+### v4.1 migration (`schema_v4_1_auth_and_summary`)
+
+1. `users.activation_token_hash`, `users.activation_expires_at` (invite-only staff activation).
+2. `maintenance_cases.customer_confirmed_at`, `maintenance_cases.customer_note`.
+3. `audit_action` enum gains `CASE_CONFIRMED_BY_CUSTOMER` (its own `ALTER TYPE ... ADD VALUE` statement).
+
+### v4.2 migration (`schema_v4_2_audit_and_activation_index`)
+
+1. `audit_action` enum gains `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, and `ATTACHMENT_DELETED` (each in its own `ALTER TYPE ... ADD VALUE` statement).
+2. Unique index `users_activation_token_hash_key` on `users.activation_token_hash`, so activation is an index lookup. Nulls are allowed to repeat; only real hashes must be unique.
+
 ## 8. Manager financial summary
 
 Simple aggregation over `job_costs`, no reporting table: confirmed revenue by period (`payment_status = CONFIRMED`, by `payment_confirmed_at`); revenue by equipment category (join assignments, requests, equipment, equipment types); counts and totals of `PENDING`, `INVOICE_SUBMITTED`, and `DISPUTED` payments.
 
-## 9. Domain summary
+## 9. Decision log
+
+| Version | Decision |
+| --- | --- |
+| v2 | Single `init` migration; 33 tables; enum types in snake_case; `timestamptz`; actor foreign keys. |
+| v4.2 | Audit actions `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, `ATTACHMENT_DELETED`; unique index on `users.activation_token_hash`. |
+| v4.1 | Invite-only staff activation columns on `users`; customer-confirmed case summary columns; `CASE_CONFIRMED_BY_CUSTOMER` audit action. Commission rates are percentages everywhere. |
+| v4 | Commission precision, `invoice_lines`, `weekly_schedule`, visit-fee-only `job_costs`, `language`, `customer_had_unpaid_balance`, indexes, notifications FK. |
+
+## 10. Domain summary
 
 | Domain | Tables |
 | --- | ---: |
@@ -235,7 +273,7 @@ Simple aggregation over `job_costs`, no reporting table: confirmed revenue by pe
 | 12 Commission and Payouts | 2 |
 | Total | 33 |
 
-## 10. Remaining open items
+## 11. Remaining open items
 
 - The tier-request reviewer is the manager and the technician enters hours worked, as decided; neither is enforced by the schema.
 - Attachments have no scan status (decided: skip for the MVP).

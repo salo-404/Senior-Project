@@ -257,6 +257,8 @@ enum AuditAction {
   USER_CREATED
   USER_UPDATED
   USER_DEACTIVATED
+  USER_ROLE_CHANGED
+  ACCOUNT_ACTIVATED
   PASSWORD_CHANGED
   // Requests
   REQUEST_CREATED
@@ -264,6 +266,7 @@ enum AuditAction {
   REQUEST_CANCELLED
   CASE_VERIFIED
   CASE_CREATED_MANUAL
+  CASE_CONFIRMED_BY_CUSTOMER
   // Assignments
   ASSIGNMENT_CREATED
   ASSIGNMENT_ACCEPTED
@@ -285,6 +288,7 @@ enum AuditAction {
   COMMISSION_CHARGED
   COMMISSION_PAYMENT_RECORDED
   // Knowledge
+  ATTACHMENT_DELETED
   KNOWLEDGE_PROMOTED
   // AI
   AI_TOOL_CALL
@@ -300,15 +304,19 @@ enum AuditAction {
 // ============================================================
 
 model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
-  phone         String?  @unique
-  password_hash String
-  first_name    String
-  last_name     String
-  is_active     Boolean  @default(true)
-  created_at    DateTime @default(now()) @db.Timestamptz()
-  updated_at    DateTime @updatedAt @db.Timestamptz()
+  id                    String    @id @default(uuid())
+  email                 String    @unique
+  phone                 String?   @unique
+  password_hash         String
+  first_name            String
+  last_name             String
+  is_active             Boolean   @default(true)
+  // Invite-only staff accounts: a manager creates an inactive user and sends a one-time activation link.
+  // Only the hash of the token is stored; the link expires 48 hours after it is issued.
+  activation_token_hash String?   @unique
+  activation_expires_at DateTime? @db.Timestamptz()
+  created_at            DateTime  @default(now()) @db.Timestamptz()
+  updated_at            DateTime  @updatedAt @db.Timestamptz()
 
   roles                        UserRole[]
   refresh_tokens               RefreshToken[]
@@ -399,6 +407,9 @@ model TechnicianProfile {
   is_available        Boolean       @default(true)
   normal_rate         Decimal       @db.Decimal(10, 2)
   emergency_rate      Decimal       @db.Decimal(10, 2)
+  // Weekly availability, e.g. { "mon": [{"from":"08:00","to":"17:00"}], "tue": [...], ... }.
+  // Null = no schedule set (treated as always available when is_available = true).
+  weekly_schedule     Json?
   created_at          DateTime      @default(now()) @db.Timestamptz()
   updated_at          DateTime      @updatedAt @db.Timestamptz()
 
@@ -553,26 +564,31 @@ model Equipment {
 // ============================================================
 
 model MaintenanceRequest {
-  id                  String             @id @default(uuid())
-  customer_id         String
-  equipment_id        String
-  address_id          String
-  title               String
-  description         String?
-  priority            RequestPriority    @default(NORMAL)
-  status              RequestStatus      @default(NEW)
-  ai_analysis_status  AiAnalysisStatus   @default(PENDING)
-  problem_type        String?
-  intake_answers      Json?
-  is_safety_escalated Boolean            @default(false)
-  escalated_at        DateTime?          @db.Timestamptz()
-  escalation_reason   String?
-  rejection_reason    String?
-  cancellation_reason String?
-  cancelled_by        String?
-  contact_preference  ContactPreference?
-  created_at          DateTime           @default(now()) @db.Timestamptz()
-  updated_at          DateTime           @updatedAt @db.Timestamptz()
+  id                          String             @id @default(uuid())
+  customer_id                 String
+  equipment_id                String
+  address_id                  String
+  title                       String
+  description                 String?
+  priority                    RequestPriority    @default(NORMAL)
+  status                      RequestStatus      @default(NEW)
+  ai_analysis_status          AiAnalysisStatus   @default(PENDING)
+  problem_type                String?
+  intake_answers              Json?
+  is_safety_escalated         Boolean            @default(false)
+  escalated_at                DateTime?          @db.Timestamptz()
+  escalation_reason           String?
+  rejection_reason            String?
+  cancellation_reason         String?
+  cancelled_by                String?
+  contact_preference          ContactPreference?
+  // Detected from the first answer or chosen by the customer (e.g. "en", "ar", "ar-LB", "ar-latn");
+  // case text is stored in English.
+  language                    String?
+  // Set at submission so the dispatcher sees the unpaid-balance flag (D1) on EMERGENCY requests without recomputing it.
+  customer_had_unpaid_balance Boolean            @default(false)
+  created_at                  DateTime           @default(now()) @db.Timestamptz()
+  updated_at                  DateTime           @updatedAt @db.Timestamptz()
 
   customer          User                   @relation("CustomerRequests", fields: [customer_id], references: [id])
   equipment         Equipment              @relation(fields: [equipment_id], references: [id])
@@ -590,23 +606,27 @@ model MaintenanceRequest {
   @@index([status])
   @@index([priority])
   @@index([ai_analysis_status])
+  @@index([equipment_id, created_at])
   @@map("maintenance_requests")
 }
 
 model MaintenanceCase {
-  id                  String        @id @default(uuid())
-  request_id          String        @unique
-  source              CaseSource
-  summary             String?
-  urgency_level       UrgencyLevel?
-  safety_flags        Json?
-  symptoms            Json?
-  follow_up_questions Json?
-  possible_causes     Json?
-  verified_by         String?
-  verified_at         DateTime?     @db.Timestamptz()
-  created_at          DateTime      @default(now()) @db.Timestamptz()
-  updated_at          DateTime      @updatedAt @db.Timestamptz()
+  id                    String        @id @default(uuid())
+  request_id            String        @unique
+  source                CaseSource
+  summary               String?
+  urgency_level         UrgencyLevel?
+  safety_flags          Json?
+  symptoms              Json?
+  follow_up_questions   Json?
+  possible_causes       Json?
+  verified_by           String?
+  verified_at           DateTime?     @db.Timestamptz()
+  // The customer confirms the AI summary or writes a correction. A correction never lowers urgency or removes safety flags.
+  customer_confirmed_at DateTime?     @db.Timestamptz()
+  customer_note         String?
+  created_at            DateTime      @default(now()) @db.Timestamptz()
+  updated_at            DateTime      @updatedAt @db.Timestamptz()
 
   request  MaintenanceRequest @relation(fields: [request_id], references: [id])
   verifier User?              @relation("CaseVerifiedBy", fields: [verified_by], references: [id])
@@ -737,9 +757,17 @@ model JobCost {
   extra_visits      Int       @default(0)
   manual_labor_cost Decimal?  @db.Decimal(10, 2)
 
+  // True for the visit fee charged after a cancelled assignment. hours_worked = 1, hourly_rate_used = the
+  // technician's rate for the request priority, extra_visits = 0, so job_costs_billing_source_check still passes.
+  is_visit_fee_only Boolean @default(false)
+
   parts_cost Decimal @default(0) @db.Decimal(10, 2)
   labor_cost Decimal @db.Decimal(10, 2)
   total_cost Decimal @db.Decimal(10, 2)
+
+  // Frozen lines the customer confirms: [{ kind: "LABOR" | "EXTRA_VISIT" | "PART" | "VISIT_FEE", description: string, amountCents: number }].
+  // Nullable at the database level; the service must set it when the invoice is submitted.
+  invoice_lines Json?
 
   invoice_status         InvoiceStatus @default(PENDING_CONFIRMATION)
   customer_confirmed_at  DateTime?     @db.Timestamptz()
@@ -762,6 +790,7 @@ model JobCost {
   payment_confirmer        User?              @relation("PaymentConfirmedBy", fields: [payment_confirmed_by], references: [id])
   ledger_entries           TechnicianLedger[]
 
+  @@index([invoice_status, payment_status])
   @@map("job_costs")
 }
 
@@ -850,9 +879,10 @@ model Notification {
   created_at        DateTime             @default(now()) @db.Timestamptz()
 
   user    User                @relation(fields: [user_id], references: [id])
-  request MaintenanceRequest? @relation(fields: [request_id], references: [id])
+  request MaintenanceRequest? @relation(fields: [request_id], references: [id], onDelete: SetNull)
 
   @@index([user_id, is_read])
+  @@index([user_id, created_at])
   @@map("notifications")
 }
 
@@ -965,7 +995,7 @@ model KnowledgeChunk {
 model CommissionTier {
   id                   String             @id @default(uuid())
   name                 CommissionTierName @unique
-  commission_rate      Decimal            @db.Decimal(3, 2)
+  commission_rate      Decimal            @db.Decimal(5, 2)
   min_rating           Decimal?           @db.Decimal(3, 2)
   min_experience_years Int?
   min_completed_jobs   Int?
@@ -988,7 +1018,7 @@ model TechnicianLedger {
   balance_after         Decimal         @db.Decimal(10, 2)
   job_cost_id           String?
   tier_id_at_charge     String?
-  rate_applied          Decimal?        @db.Decimal(3, 2)
+  rate_applied          Decimal?        @db.Decimal(5, 2)
   recorded_by           String?
   payment_note          String?
   created_at            DateTime        @default(now()) @db.Timestamptz()
