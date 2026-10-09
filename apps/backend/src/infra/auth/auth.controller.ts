@@ -1,8 +1,9 @@
 import { Body, Controller, Get, HttpCode, Post, Req, Res } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { CookieOptions, Request, Response } from 'express';
-import { AppException } from '../../common/app.exception';
 import { AuthenticatedUser } from '../../common/authenticated-user';
+import { RegisterTechnicianDto } from '../../modules/technicians/dto/technicians.dto';
+import { TechniciansService } from '../../modules/technicians/technicians.service';
 import { ActivateAccountDto } from '../../modules/users/dto/users.dto';
 import { AuthService, SessionResult } from './auth.service';
 import { CurrentUser, Public } from './decorators';
@@ -24,7 +25,10 @@ const ONE_MINUTE = 60_000;
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly technicians: TechniciansService,
+  ) {}
 
   @Public()
   @Throttle({ default: { limit: loginLimit, ttl: ONE_MINUTE } })
@@ -33,12 +37,12 @@ export class AuthController {
     return this.auth.register(dto);
   }
 
-  /** TODO(week 2): implemented with the technicians module (profile + INITIAL_APPLICATION tier request). */
+  /** Technician signup: the account plus the application template. A manager approves or rejects it. */
   @Public()
   @Throttle({ default: { limit: loginLimit, ttl: ONE_MINUTE } })
   @Post('register/technician')
-  registerTechnician(): never {
-    throw new AppException('NOT_IMPLEMENTED', 'Technician registration is not available yet', 501);
+  registerTechnician(@Body() dto: RegisterTechnicianDto) {
+    return this.technicians.registerApplicant(dto);
   }
 
   @Public()

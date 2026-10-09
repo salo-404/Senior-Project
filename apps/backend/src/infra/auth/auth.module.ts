@@ -9,11 +9,14 @@ import { AuditModule } from '../audit/audit.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard, RolesGuard } from './guards';
-import { NoTechnicianProfileStatus, TechnicianProfileStatusPort } from './technician-profile-status.port';
+import { TechniciansModule } from '../../modules/technicians/technicians.module';
+import { TechnicianProfileStatusProvider } from '../../modules/technicians/technicians.service';
+import { TechnicianProfileStatusPort } from './technician-profile-status.port';
 
 @Module({
   imports: [
     UsersModule,
+    TechniciansModule,
     AuditModule,
     JwtModule.register({}), // secrets are passed per call: access and refresh tokens use different ones
     ThrottlerModule.forRootAsync({
@@ -26,7 +29,7 @@ import { NoTechnicianProfileStatus, TechnicianProfileStatusPort } from './techni
   controllers: [AuthController],
   providers: [
     AuthService,
-    { provide: TechnicianProfileStatusPort, useClass: NoTechnicianProfileStatus },
+    { provide: TechnicianProfileStatusPort, useExisting: TechnicianProfileStatusProvider },
     // Guard order matters: rate limit, then authentication, then roles.
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },

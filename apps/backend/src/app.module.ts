@@ -11,6 +11,7 @@ import { PrismaModule } from './infra/prisma/prisma.module';
 import { QueueModule } from './infra/queue/queue.module';
 import { SafetyModule } from './infra/safety/safety.module';
 import { StorageModule } from './infra/storage/storage.module';
+import { TechniciansModule } from './modules/technicians/technicians.module';
 import { UsersModule } from './modules/users/users.module';
 
 @Module({
@@ -47,6 +48,7 @@ import { UsersModule } from './modules/users/users.module';
     SafetyModule,
     StorageModule,
     UsersModule,
+    TechniciansModule,
     NotificationsModule,
     AuthModule,
   ],

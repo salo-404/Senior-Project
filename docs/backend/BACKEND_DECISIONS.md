@@ -51,3 +51,16 @@ Infrastructure modules (prisma, audit, queue, health, safety, notifications, sto
 | Intake safety key | `intake_answers.safety_concern` is a boolean; `true` means the customer answered Yes to the form's safety question. No other key is read. |
 | E2E database warning | `npm run test:e2e` creates and drops a throwaway `maintain_e2e_*` database on the server named in `apps/backend/.env` `DATABASE_URL` (or `E2E_ADMIN_DATABASE_URL`). It never touches the dev database, but the Postgres user needs permission to create databases, and the server must be running. Never point it at a production server. |
 
+
+## Technician signup and applications (technicians module)
+
+Replaces the 501 stub of `POST /auth/register/technician`. Needs the reference data from `npm run seed:reference` (skills and commission tiers).
+
+| Topic | Decision |
+| --- | --- |
+| Signup | `POST /auth/register/technician` takes the same account fields as `/auth/register` plus an `application` object: `skills` (ids from `GET /skills` with a 1-5 proficiency), `years_of_experience`, `bio`, requested `normal_rate` and `emergency_rate`, optional `proposed_tier` and `supporting_notes`. The job categories applied for are derived from the chosen skills. It creates the TECHNICIAN account, a `PENDING_REVIEW` profile and an `INITIAL_APPLICATION` in one transaction. No session is issued; the applicant logs in normally. |
+| While pending or rejected | The applicant can log in and read `GET /technician-applications/mine` (status, manager's `review_notes`). The session already carries `technicianProfileStatus` through `TechnicianProfileStatusPort`, now implemented by the technicians module. Eligibility for work still requires `APPROVED`. |
+| Manager decision | `GET /technician-tier-requests` (paginated, `?status=`), `GET /technician-tier-requests/:id`, `PATCH /technician-tier-requests/:id` with `decision` `APPROVED` or `REJECTED`. Approving grants a tier (`final_tier`, else the proposed tier, else BRONZE) and may adjust the rates; rejecting requires `review_notes`. A conditional update makes a second decision return 409 `ALREADY_DECIDED`. Audited as `TECHNICIAN_APPROVED` / `TECHNICIAN_REJECTED`. |
+| Re-apply | `POST /technician-applications/reapply` (technician, only while `REJECTED`) takes the same template, replaces the skills, moves the profile back to `PENDING_REVIEW` and adds a new `INITIAL_APPLICATION`. Earlier applications stay on record. Otherwise 409 `NOT_REJECTED`. |
+| Tier requests | Only `INITIAL_APPLICATION` is handled; `TIER_UPDATE` requests are refused (400 `NOT_AN_APPLICATION`) until that flow is built. |
+| Reference data | `npm run seed:reference` upserts 7 skills (HVAC, home appliances) and the BRONZE/SILVER/GOLD tiers. The commission rates (15, 12, 10 percent) are placeholders until the business confirms them. |
