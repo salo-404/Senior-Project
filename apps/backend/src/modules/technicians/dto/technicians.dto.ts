@@ -4,10 +4,12 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsDefined,
   IsEnum,
   IsIn,
   IsInt,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -60,7 +62,8 @@ export class ApplicationDetailsDto {
 
 /** Public signup as a technician: the account fields plus the application template. */
 export class RegisterTechnicianDto extends RegisterDto {
-  @ValidateNested() @Type(() => ApplicationDetailsDto)
+  // IsDefined + IsObject: ValidateNested alone lets a missing value through.
+  @IsDefined() @IsObject() @ValidateNested() @Type(() => ApplicationDetailsDto)
   application!: ApplicationDetailsDto;
 }
 
