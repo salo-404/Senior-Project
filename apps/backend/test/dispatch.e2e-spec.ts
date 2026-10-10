@@ -113,6 +113,25 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
   const assign = (id: string, body: Record<string, unknown>, who = 'dispatcher') =>
     http().post(`${API}/cases/${id}/assignments`).set(as(who)).send(body);
 
+  // NOTE(plan-alignment): availability follows the backend plan: 1 - open assignments / 3, and a technician with
+  // 3 open assignments (PENDING, ACCEPTED or IN_PROGRESS) is left out of the ranking altogether.
+  const OPEN = [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS];
+  const openJobs = (profileId: string) =>
+    prisma.assignment.count({ where: { technician_profile_id: profileId, status: { in: OPEN } } });
+
+  /** Brings a technician to exactly 3 open assignments through the real endpoint; returns the ones it created. */
+  async function fillToLimit(profileId: string): Promise<string[]> {
+    const created: string[] = [];
+    while ((await openJobs(profileId)) < 3) {
+      const caseId = await approvedCase();
+      const res = await assign(caseId, { technician_profile_id: profileId }).expect(201);
+      created.push(res.body.id);
+    }
+    return created;
+  }
+  const release = (assignmentIds: string[]) =>
+    prisma.assignment.updateMany({ where: { id: { in: assignmentIds } }, data: { status: AssignmentStatus.CANCELLED } });
+
   const setAllAvailability = (available: boolean) =>
     prisma.technicianProfile.updateMany({ where: { id: { in: Object.values(profileIds) } }, data: { is_available: available } });
 
@@ -287,17 +306,50 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
       expect(again.body.error.code).toBe('NOT_APPROVED');
     });
 
-    it('scores a technician with an accepted job as unavailable but still lists them', async () => {
+    it('lowers availability by a third for every open assignment, PENDING ones included', async () => {
       const id = await approvedCase();
-      const busy = await prisma.assignment.findFirstOrThrow({ where: { technician_profile_id: profileIds.star } });
-      await prisma.assignment.update({ where: { id: busy.id }, data: { status: AssignmentStatus.ACCEPTED } });
+      const open = await openJobs(profileIds.star);
+      expect(open).toBeGreaterThan(0);
+      expect(open).toBeLessThan(3);
 
       const res = await ranking(id).expect(200);
       const star = res.body.ranking.find((r: { name: string }) => r.name === 'star Tech');
-      expect(star.factors.availability).toBe(0);
-      // 100 - 30 availability points
-      expect(star.score).toBe(70);
-      await prisma.assignment.update({ where: { id: busy.id }, data: { status: AssignmentStatus.PENDING } });
+      expect(star.factors.availability).toBe(Number((1 - open / 3).toFixed(4)));
+      expect(star.contributions.availability).toBe(Number((30 * (1 - open / 3)).toFixed(2)));
+    });
+
+    it('leaves out a technician with 3 open assignments, says why, and refuses to assign them', async () => {
+      const created = await fillToLimit(profileIds.star);
+      try {
+        const id = await approvedCase();
+        const res = await ranking(id).expect(200);
+        expect(res.body.ranking.map((r: { name: string }) => r.name)).not.toContain('star Tech');
+        const left = res.body.excluded.find((e: { name: string }) => e.name === 'star Tech');
+        expect(left.reasons).toEqual(['TOO_MANY_ACTIVE_JOBS']);
+
+        const refused = await assign(id, { technician_profile_id: profileIds.star }).expect(409);
+        expect(refused.body.error.code).toBe('NOT_ELIGIBLE');
+      } finally {
+        await release(created);
+      }
+    });
+
+    it('leaves out a technician who already rejected this case', async () => {
+      const id = await approvedCase();
+      await prisma.assignment.create({
+        data: {
+          request_id: id,
+          technician_profile_id: profileIds.star,
+          assigned_by: ids.dispatcher,
+          status: AssignmentStatus.REJECTED,
+          rejection_reason: 'Too far away',
+        },
+      });
+      const res = await ranking(id).expect(200);
+      const left = res.body.excluded.find((e: { name: string }) => e.name === 'star Tech');
+      expect(left.reasons).toEqual(['REJECTED_THIS_CASE']);
+      const refused = await assign(id, { technician_profile_id: profileIds.star }).expect(409);
+      expect(refused.body.error.code).toBe('NOT_ELIGIBLE');
     });
   });
 
@@ -421,11 +473,10 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
       }
     });
 
-    it('is also allowed when the only available technicians are all busy with an accepted job', async () => {
+    it('is also allowed when the only available technicians are all at the 3-job limit', async () => {
       const emergency = await approvedCase(true);
       await prisma.technicianProfile.updateMany({ where: { id: { in: [profileIds.mid] } }, data: { is_available: false } });
-      const starJob = await prisma.assignment.findFirstOrThrow({ where: { technician_profile_id: profileIds.star } });
-      await prisma.assignment.update({ where: { id: starJob.id }, data: { status: AssignmentStatus.IN_PROGRESS } });
+      const created = await fillToLimit(profileIds.star);
       try {
         await http()
           .post(`${API}/cases/${emergency}/assignments/external`)
@@ -433,7 +484,7 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
           .send({ external_name: 'Fixit Co', external_phone: '+96170123456' })
           .expect(201);
       } finally {
-        await prisma.assignment.update({ where: { id: starJob.id }, data: { status: AssignmentStatus.PENDING } });
+        await release(created);
         await prisma.technicianProfile.update({ where: { id: profileIds.mid }, data: { is_available: true } });
       }
     });

@@ -1,5 +1,13 @@
 import { MaintenanceCategory as Cat, RequestPriority as P } from '@prisma/client';
-import { TechnicianInput, WEIGHTS, exclusionReasons, rankTechnicians } from './ranking.calculator';
+import {
+  MAX_ACTIVE_ASSIGNMENTS,
+  MIN_REVIEWS_FOR_FEEDBACK,
+  NEUTRAL_FEEDBACK,
+  TechnicianInput,
+  WEIGHTS,
+  exclusionReasons,
+  rankTechnicians,
+} from './ranking.calculator';
 
 function tech(id: string, over: Partial<TechnicianInput> = {}): TechnicianInput {
   return {
@@ -15,7 +23,8 @@ function tech(id: string, over: Partial<TechnicianInput> = {}): TechnicianInput 
     normalRate: 20,
     emergencyRate: 20,
     skills: [{ category: Cat.HVAC, proficiency: 4 }],
-    hasActiveJob: false,
+    activeAssignments: 0,
+    rejectedThisCase: false,
     ...over,
   };
 }
@@ -32,19 +41,45 @@ describe('ranking weights', () => {
   });
 });
 
+describe('plan constants', () => {
+  it('match the backend plan: 3 open jobs at most, neutral feedback 0.6 below 3 reviews', () => {
+    expect(MAX_ACTIVE_ASSIGNMENTS).toBe(3);
+    expect(MIN_REVIEWS_FOR_FEEDBACK).toBe(3);
+    expect(NEUTRAL_FEEDBACK).toBe(0.6);
+  });
+});
+
 describe('exclusionReasons', () => {
   it('is empty for an eligible technician', () => {
     expect(exclusionReasons(tech('a'), Cat.HVAC)).toEqual([]);
   });
 
   it('lists every reason that applies', () => {
-    const bad = tech('a', { accountActive: false, isAvailable: false, isPaymentBlocked: true });
+    const bad = tech('a', {
+      accountActive: false,
+      isAvailable: false,
+      isPaymentBlocked: true,
+      activeAssignments: 3,
+      rejectedThisCase: true,
+    });
     expect(exclusionReasons(bad, Cat.HOME_APPLIANCES)).toEqual([
       'ACCOUNT_INACTIVE',
       'NOT_AVAILABLE',
       'PAYMENT_BLOCKED',
       'MISSING_SKILL',
+      'TOO_MANY_ACTIVE_JOBS',
+      'REJECTED_THIS_CASE',
     ]);
+  });
+
+  it('excludes a technician who already has 3 open assignments, but not one with 2', () => {
+    expect(exclusionReasons(tech('a', { activeAssignments: 2 }), Cat.HVAC)).toEqual([]);
+    expect(exclusionReasons(tech('a', { activeAssignments: 3 }), Cat.HVAC)).toEqual(['TOO_MANY_ACTIVE_JOBS']);
+    expect(exclusionReasons(tech('a', { activeAssignments: 5 }), Cat.HVAC)).toEqual(['TOO_MANY_ACTIVE_JOBS']);
+  });
+
+  it('excludes a technician who already rejected this case', () => {
+    expect(exclusionReasons(tech('a', { rejectedThisCase: true }), Cat.HVAC)).toEqual(['REJECTED_THIS_CASE']);
   });
 
   it('requires a skill in the case category, not just any skill', () => {
@@ -54,11 +89,11 @@ describe('exclusionReasons', () => {
 });
 
 describe('rankTechnicians (worked examples)', () => {
-  // A: skill 4/5=.8, free=1, 5y=.5, rating 4/5=.8, cheapest=1   B: skill 1, busy=0, 10y=1, rating 1, dearest=0
+  // A: skill 4/5=.8, free=1, 5y=.5, rating 4/5=.8, cheapest=1   B: skill 1, 2 open jobs=1/3, 10y=1, rating 1, dearest=0
   const a = tech('a', { normalRate: 20, emergencyRate: 20 });
   const b = tech('b', {
     skills: [{ category: Cat.HVAC, proficiency: 5 }],
-    hasActiveJob: true,
+    activeAssignments: 2,
     yearsOfExperience: 10,
     rating: 5,
     normalRate: 30,
@@ -67,10 +102,10 @@ describe('rankTechnicians (worked examples)', () => {
 
   it('scores a NORMAL request with the normal weights', () => {
     const result = rankTechnicians(request(P.NORMAL), [b, a]);
-    // A = .3*.8 + .3*1 + .15*.5 + .15*.8 + .1*1 = .835     B = .3*1 + 0 + .15*1 + .15*1 + 0 = .6
+    // A = .3*.8 + .3*1 + .15*.5 + .15*.8 + .1*1 = .835     B = .3*1 + .3*(1/3) + .15*1 + .15*1 + 0 = .7
     expect(result.ranking.map((r) => [r.technicianProfileId, r.rank, r.score])).toEqual([
       ['a', 1, 83.5],
-      ['b', 2, 60],
+      ['b', 2, 70],
     ]);
     expect(result.rateType).toBe('NORMAL');
     expect(result.ranking[0].factors).toEqual({ skill: 0.8, availability: 1, experience: 0.5, feedback: 0.8, rate: 1 });
@@ -79,10 +114,10 @@ describe('rankTechnicians (worked examples)', () => {
 
   it('scores an EMERGENCY request with the emergency weights and the emergency rate', () => {
     const result = rankTechnicians(request(P.EMERGENCY), [a, b]);
-    // A = .3*.8 + .4*1 + .15*.5 + .1*.8 + .05*1 = .845     B = .3*1 + 0 + .15 + .1 + 0 = .55
+    // A = .3*.8 + .4*1 + .15*.5 + .1*.8 + .05*1 = .845     B = .3*1 + .4*(1/3) + .15 + .1 + 0 = .6833
     expect(result.ranking.map((r) => [r.technicianProfileId, r.score])).toEqual([
       ['a', 84.5],
-      ['b', 55],
+      ['b', 68.33],
     ]);
     expect(result.rateType).toBe('EMERGENCY');
     expect(result.weights).toEqual(WEIGHTS.emergency);
@@ -116,9 +151,16 @@ describe('rankTechnicians (edge cases)', () => {
     expect(result.ranking[0].rank).toBe(1);
   });
 
-  it('gives an unreviewed technician a neutral feedback score, not zero', () => {
-    const result = rankTechnicians(request(P.NORMAL), [tech('a', { rating: 0, totalReviews: 0 })]);
-    expect(result.ranking[0].factors.feedback).toBe(0.5);
+  it('gives a technician with fewer than 3 reviews a neutral 0.6, not zero and not their rating', () => {
+    for (const totalReviews of [0, 1, 2]) {
+      const result = rankTechnicians(request(P.NORMAL), [tech('a', { rating: 5, totalReviews })]);
+      expect(result.ranking[0].factors.feedback).toBe(0.6);
+    }
+  });
+
+  it('uses rating / 5 once a technician has 3 reviews', () => {
+    const result = rankTechnicians(request(P.NORMAL), [tech('a', { rating: 4, totalReviews: 3 })]);
+    expect(result.ranking[0].factors.feedback).toBe(0.8);
   });
 
   it('caps experience at 10 years and proficiency at 5', () => {
@@ -142,10 +184,28 @@ describe('rankTechnicians (edge cases)', () => {
     expect(result.ranking[0].factors.skill).toBe(0.8);
   });
 
-  it('scores availability 0 for a technician with an active job, even though they stay eligible', () => {
-    const result = rankTechnicians(request(P.NORMAL), [tech('a', { hasActiveJob: true })]);
-    expect(result.ranking[0].factors.availability).toBe(0);
-    expect(result.ranking).toHaveLength(1);
+  it('scores availability as 1 - open assignments / 3', () => {
+    const result = rankTechnicians(request(P.NORMAL), [
+      tech('a', { activeAssignments: 0 }),
+      tech('b', { activeAssignments: 1 }),
+      tech('c', { activeAssignments: 2 }),
+    ]);
+    const availability = (id: string) => result.ranking.find((r) => r.technicianProfileId === id)!.factors.availability;
+    expect(availability('a')).toBe(1);
+    expect(availability('b')).toBe(0.6667);
+    expect(availability('c')).toBe(0.3333);
+  });
+
+  it('leaves a technician with 3 open assignments out of the ranking and says why', () => {
+    const result = rankTechnicians(request(P.NORMAL), [tech('a', { activeAssignments: 3 }), tech('b')]);
+    expect(result.ranking.map((r) => r.technicianProfileId)).toEqual(['b']);
+    expect(result.excluded).toEqual([{ technicianProfileId: 'a', name: 'Tech a', reasons: ['TOO_MANY_ACTIVE_JOBS'] }]);
+  });
+
+  it('leaves out a technician who rejected this case', () => {
+    const result = rankTechnicians(request(P.NORMAL), [tech('a', { rejectedThisCase: true }), tech('b')]);
+    expect(result.ranking.map((r) => r.technicianProfileId)).toEqual(['b']);
+    expect(result.excluded[0].reasons).toEqual(['REJECTED_THIS_CASE']);
   });
 
   it('reports excluded technicians with their reasons and returns an empty ranking when nobody is eligible', () => {

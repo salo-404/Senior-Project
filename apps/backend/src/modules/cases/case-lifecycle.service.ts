@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, Prisma, RequestStatus } from '@prisma/client';
+import { AuditAction, Prisma, RequestPriority, RequestStatus } from '@prisma/client';
 import { AppException } from '../../common/app.exception';
 import { Db } from '../../common/db';
 import { AuditService } from '../../infra/audit/audit.service';
@@ -7,11 +7,17 @@ import { AuditService } from '../../infra/audit/audit.service';
 const S = RequestStatus;
 
 /**
- * The only allowed moves (plan/00_system_overview.md, "Case Lifecycle").
+ * The only allowed moves (plan/00_system_overview.md, "Case Lifecycle", and backend plan section 6.3).
  * COMPLETED, CANCELLED and REJECTED are terminal. Who may make a move is checked by the caller.
+ *
+ * NOTE(plan-alignment, for the next developer or agent): UNDER_REVIEW means "the dispatcher is checking this
+ * case directly". An earlier version forced every case, emergencies included, through NEW -> UNDER_REVIEW.
+ * The plan lets the dispatcher approve an EMERGENCY straight from NEW (the emergency form already carries
+ * everything needed) and reject from NEW. NEW -> APPROVED is therefore listed here but allowed only for
+ * EMERGENCY priority (see canTransition). A normal or urgent case still has to go through UNDER_REVIEW.
  */
 export const ALLOWED_TRANSITIONS: Record<RequestStatus, readonly RequestStatus[]> = {
-  [S.NEW]: [S.UNDER_REVIEW, S.CANCELLED],
+  [S.NEW]: [S.UNDER_REVIEW, S.APPROVED, S.REJECTED, S.CANCELLED],
   [S.UNDER_REVIEW]: [S.REQUIRES_FOLLOW_UP, S.APPROVED, S.REJECTED, S.CANCELLED],
   [S.REQUIRES_FOLLOW_UP]: [S.UNDER_REVIEW, S.CANCELLED],
   [S.APPROVED]: [S.ASSIGNED, S.CANCELLED],
@@ -42,8 +48,11 @@ export interface TransitionInput {
 export class CaseLifecycleService {
   constructor(private readonly audit: AuditService) {}
 
-  canTransition(from: RequestStatus, to: RequestStatus): boolean {
-    return ALLOWED_TRANSITIONS[from].includes(to);
+  /** The table decides, plus one rule: skipping review (NEW -> APPROVED) is for EMERGENCY cases only. */
+  canTransition(from: RequestStatus, to: RequestStatus, priority?: RequestPriority): boolean {
+    if (!ALLOWED_TRANSITIONS[from].includes(to)) return false;
+    if (from === S.NEW && to === S.APPROVED) return priority === RequestPriority.EMERGENCY;
+    return true;
   }
 
   /** Writes the first history row (null -> NEW) and the REQUEST_CREATED audit row for a new request. */
@@ -75,11 +84,14 @@ export class CaseLifecycleService {
   }
 
   async transition(tx: Db, input: TransitionInput): Promise<{ from: RequestStatus; to: RequestStatus }> {
-    const current = await tx.maintenanceRequest.findUnique({ where: { id: input.requestId }, select: { status: true } });
+    const current = await tx.maintenanceRequest.findUnique({
+      where: { id: input.requestId },
+      select: { status: true, priority: true },
+    });
     if (!current) throw new NotFoundException('Case not found');
 
     const from = current.status;
-    if (!this.canTransition(from, input.to)) {
+    if (!this.canTransition(from, input.to, current.priority)) {
       throw new AppException('INVALID_TRANSITION', `A case in ${from} cannot move to ${input.to}`, 409, {
         from,
         to: input.to,

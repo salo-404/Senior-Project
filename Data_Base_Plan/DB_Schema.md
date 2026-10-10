@@ -206,12 +206,12 @@ NestJS computes it; AI never does. Store the result in `assignments.ranking_snap
 | Factor | Normal | Emergency | Source |
 | --- | ---: | ---: | --- |
 | Skill | 30% | 30% | `technician_skills` proficiency, category match |
-| Availability | 30% | 40% | `is_available` and active assignments |
+| Availability | 30% | 40% | `1 - open assignments / 3` (open = `PENDING`, `ACCEPTED`, `IN_PROGRESS`) |
 | Experience | 15% | 15% | `technician_profiles.years_of_experience` |
-| Feedback | 15% | 10% | `technician_profiles.rating` |
+| Feedback | 15% | 10% | `technician_profiles.rating` / 5; a neutral 0.6 below 3 reviews |
 | Rate | 10% | 5% | `normal_rate` or `emergency_rate` by request priority; lower is better |
 
-Rate score: `1 - (rate - min) / (max - min)` across candidates; `1.0` for all when `max = min`. A technician with an `ACCEPTED` or `IN_PROGRESS` assignment scores 0 on availability. Distance is not part of the MVP; GPS, a map view, and route optimization are future work.
+Rate score: `1 - (rate - min) / (max - min)` across candidates; `1.0` for all when `max = min`. A technician with 3 open assignments is excluded from the ranking, as is one who is unavailable, payment-blocked, without a skill in the case's category, inactive, or who already rejected that case. Distance is not part of the MVP; GPS, a map view, and route optimization are future work.
 
 ## 7. Raw SQL in the `init` migration
 
@@ -251,6 +251,7 @@ Simple aggregation over `job_costs`, no reporting table: confirmed revenue by pe
 | Version | Decision |
 | --- | --- |
 | v2 | Single `init` migration; 33 tables; enum types in snake_case; `timestamptz`; actor foreign keys. |
+| Oct 2026 (backend review) | Ranking follows the backend plan: availability `1 - open / 3` with `PENDING` counted and a 3-job cap, neutral feedback 0.6 below 3 reviews, exclusion of a technician who rejected the case. An emergency case may be approved straight from `NEW`. No schema change. |
 | v4.2 | Audit actions `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, `ATTACHMENT_DELETED`; unique index on `users.activation_token_hash`. |
 | v4.1 | Invite-only staff activation columns on `users`; customer-confirmed case summary columns; `CASE_CONFIRMED_BY_CUSTOMER` audit action. Commission rates are percentages everywhere. |
 | v4 | Commission precision, `invoice_lines`, `weekly_schedule`, visit-fee-only `job_costs`, `language`, `customer_had_unpaid_balance`, indexes, notifications FK. |

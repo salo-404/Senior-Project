@@ -3,6 +3,15 @@ import { MaintenanceCategory, RequestPriority } from '@prisma/client';
 /**
  * Deterministic technician ranking (plan/03_module_plan.md, "Ranking"). Pure functions: no database, no AI,
  * the same input always gives the same output. The dispatcher sees every factor and may still pick anyone eligible.
+ *
+ * NOTE(plan-alignment, for the next developer or agent): the backend plan (maintAIn_Backend_Plan.md, section 7)
+ * is the source of truth for this file. An earlier version scored availability as 0 or 1 from a single active
+ * job and used a neutral feedback of 0.5. It now follows the plan:
+ *   - availability = 1 - activeAssignments / MAX_ACTIVE_ASSIGNMENTS (PENDING, ACCEPTED and IN_PROGRESS all count);
+ *   - a technician already at MAX_ACTIVE_ASSIGNMENTS (3) is excluded, not just scored 0;
+ *   - feedback is rating / 5, but a technician with fewer than MIN_REVIEWS_FOR_FEEDBACK (3) reviews gets 0.6;
+ *   - a technician who already rejected this case is excluded from it.
+ * Do not change these numbers here without changing the plan and plan/08_backend_process.md.
  */
 
 export type FactorName = 'skill' | 'availability' | 'experience' | 'feedback' | 'rate';
@@ -19,10 +28,19 @@ export const MAX_PROFICIENCY = 5;
 /** Experience counts up to this many years; more does not score higher. */
 export const EXPERIENCE_CAP_YEARS = 10;
 export const MAX_RATING = 5;
-/** A technician with no reviews yet gets a neutral feedback score instead of 0. */
-export const NEUTRAL_FEEDBACK = 0.5;
+/** Plan: a technician with fewer than 3 reviews has no reliable rating yet and gets a neutral 0.6. */
+export const MIN_REVIEWS_FOR_FEEDBACK = 3;
+export const NEUTRAL_FEEDBACK = 0.6;
+/** Plan: at most 3 open assignments (PENDING, ACCEPTED or IN_PROGRESS) per technician. A config value. */
+export const MAX_ACTIVE_ASSIGNMENTS = 3;
 
-export type ExclusionReason = 'ACCOUNT_INACTIVE' | 'NOT_AVAILABLE' | 'PAYMENT_BLOCKED' | 'MISSING_SKILL';
+export type ExclusionReason =
+  | 'ACCOUNT_INACTIVE'
+  | 'NOT_AVAILABLE'
+  | 'PAYMENT_BLOCKED'
+  | 'MISSING_SKILL'
+  | 'TOO_MANY_ACTIVE_JOBS'
+  | 'REJECTED_THIS_CASE';
 
 /** One approved technician as the ranking sees them. */
 export interface TechnicianInput {
@@ -39,8 +57,10 @@ export interface TechnicianInput {
   emergencyRate: number;
   /** The technician's skills with their 1-5 proficiency. */
   skills: { category: MaintenanceCategory; proficiency: number }[];
-  /** True when the technician has an ACCEPTED or IN_PROGRESS assignment. */
-  hasActiveJob: boolean;
+  /** Open assignments: PENDING, ACCEPTED or IN_PROGRESS. */
+  activeAssignments: number;
+  /** True when this technician already rejected this very case (the assignment is REJECTED). */
+  rejectedThisCase: boolean;
 }
 
 export interface RankingRequest {
@@ -93,6 +113,8 @@ export function exclusionReasons(tech: TechnicianInput, category: MaintenanceCat
   if (!tech.isAvailable) reasons.push('NOT_AVAILABLE');
   if (tech.isPaymentBlocked) reasons.push('PAYMENT_BLOCKED');
   if (!tech.skills.some((s) => s.category === category)) reasons.push('MISSING_SKILL');
+  if (tech.activeAssignments >= MAX_ACTIVE_ASSIGNMENTS) reasons.push('TOO_MANY_ACTIVE_JOBS');
+  if (tech.rejectedThisCase) reasons.push('REJECTED_THIS_CASE');
   return reasons;
 }
 
@@ -119,9 +141,12 @@ export function rankTechnicians(request: RankingRequest, technicians: Technician
     const rate = rateOf(tech);
     const factors: Record<FactorName, number> = {
       skill: Math.min(bestProficiency, MAX_PROFICIENCY) / MAX_PROFICIENCY,
-      availability: tech.hasActiveJob ? 0 : 1,
+      availability: Math.max(0, 1 - tech.activeAssignments / MAX_ACTIVE_ASSIGNMENTS),
       experience: Math.min(Math.max(tech.yearsOfExperience, 0), EXPERIENCE_CAP_YEARS) / EXPERIENCE_CAP_YEARS,
-      feedback: tech.totalReviews > 0 ? Math.min(Math.max(tech.rating, 0), MAX_RATING) / MAX_RATING : NEUTRAL_FEEDBACK,
+      feedback:
+        tech.totalReviews >= MIN_REVIEWS_FOR_FEEDBACK
+          ? Math.min(Math.max(tech.rating, 0), MAX_RATING) / MAX_RATING
+          : NEUTRAL_FEEDBACK,
       rate: maxRate === minRate ? 1 : 1 - (rate - minRate) / (maxRate - minRate),
     };
     const contributions = {} as Record<FactorName, number>;

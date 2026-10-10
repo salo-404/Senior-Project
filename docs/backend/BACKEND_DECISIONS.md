@@ -64,3 +64,32 @@ Replaces the 501 stub of `POST /auth/register/technician`. Needs the reference d
 | Re-apply | `POST /technician-applications/reapply` (technician, only while `REJECTED`) takes the same template, replaces the skills, moves the profile back to `PENDING_REVIEW` and adds a new `INITIAL_APPLICATION`. Earlier applications stay on record. Otherwise 409 `NOT_REJECTED`. |
 | Tier requests | Only `INITIAL_APPLICATION` is handled; `TIER_UPDATE` requests are refused (400 `NOT_AN_APPLICATION`) until that flow is built. |
 | Reference data | `npm run seed:reference` upserts 7 skills (HVAC, home appliances) and the BRONZE/SILVER/GOLD tiers. The commission rates (15, 12, 10 percent) are placeholders until the business confirms them. |
+
+## Stage 2 and 3 decisions (requests, cases, dispatch)
+
+Code is on `feature/stage2-equipment-cases`. The reviewed and aligned version is described in `plan/08_backend_process.md`.
+
+| Topic | Decision |
+| --- | --- |
+| One place for status changes | `CaseLifecycleService.transition` validates the move against an allowed table, updates with `WHERE status = <from>` (a parallel change gets 409 `CASE_CHANGED`), and writes the status history and the audit row in the caller's transaction. Nothing else may update `maintenance_requests.status`. |
+| Emergency approval | UNDER_REVIEW means the dispatcher is checking a case directly. An EMERGENCY case may be approved straight from `NEW` (no `START` step); any other priority gets 409 `INVALID_TRANSITION`. A case may be rejected from `NEW` or `UNDER_REVIEW`, with a reason. |
+| Submissions | `POST /requests` (NORMAL, URGENT; blocked by an unpaid balance) and `POST /requests/emergency` (short form, generated title, always accepted, unpaid balance only flagged). Both create a `MANUAL` case in the same transaction. Only `intake_answers.safety_concern === true` escalates. Dispatchers are notified after commit. |
+| Photos | Customer only, own case, while the case is `NEW`, `UNDER_REVIEW` or `REQUIRES_FOLLOW_UP`, at most 5 per case. The customer who owns the request can open every photo on it. |
+| Cancelling | The customer may cancel until `ASSIGNED`. An open assignment is cancelled in the same transaction and the technician is notified. |
+| Ranking | See `plan/08_backend_process.md` section 6. Pure code; the dispatcher may override the top pick; the ranking and the override are stored in `assignments.ranking_snapshot`. |
+| External technician | EMERGENCY only, and only when no internal technician is eligible. Open question: the backend plan also allows URGENT. |
+
+## Plan alignment changes (stage 2 and 3 review)
+
+The stage 2 and 3 code differed from the backend plan in the places below. The plan won; each changed place has a `NOTE(plan-alignment)` comment.
+
+| Change | Reason |
+| --- | --- |
+| Availability is `1 - open assignments / 3`, and `PENDING` assignments count | Backend plan section 7.1. The earlier 0-or-1 score ignored a technician's real workload. |
+| A technician with 3 open assignments is excluded (`TOO_MANY_ACTIVE_JOBS`) | Backend plan section 7.1 (limit of 3, a config value). |
+| Feedback is a neutral 0.6 below 3 reviews (was 0.5 below 1) | Backend plan section 7.1: one or two reviews are not a reliable rating. |
+| A technician who rejected a case is excluded from it (`REJECTED_THIS_CASE`) | Backend plan section 7.1. It will matter once technicians can reject in the jobs stage. |
+| "No internal technician available" now means the ranking is empty | The external-technician rule needed a definition consistent with the 3-job limit. |
+| `NEW -> APPROVED` (emergency only) and `NEW -> REJECTED` added to the lifecycle | Backend plan section 6.3: an emergency skips review. |
+| `DB_Schema.md` section 6 updated to match | The schema document and the plan must say the same thing. |
+| E2E files no longer collide: the database is emptied before each file | All e2e files share one throwaway database and reuse test emails. Each file passed alone, but the full run failed with a unique-constraint error on `email`. |

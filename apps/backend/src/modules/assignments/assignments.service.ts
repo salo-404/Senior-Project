@@ -23,7 +23,8 @@ import { RankingResult, TechnicianInput, rankTechnicians } from './ranking/ranki
 
 /** An assignment can be scheduled slightly in the past (clock drift), not further. */
 const SCHEDULE_GRACE_MS = 5 * 60 * 1000;
-const ACTIVE_JOB: AssignmentStatus[] = [AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS];
+/** NOTE(plan-alignment): every open assignment counts toward the 3-job limit, including PENDING ones. */
+const ACTIVE_JOB: AssignmentStatus[] = [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS];
 
 const REQUEST_FOR_RANKING = {
   id: true,
@@ -166,10 +167,11 @@ export class AssignmentsService {
         throw new AppException('EXTERNAL_ONLY_FOR_EMERGENCY', 'An external technician can be used only for an emergency', 409);
       }
       const ranking = await this.rank(tx, request);
-      const free = ranking.ranking.filter((r) => r.factors.availability > 0);
-      if (free.length > 0) {
+      // NOTE(plan-alignment): "available" now means eligible. Technicians at the 3-job limit, unavailable,
+      // payment-blocked, without the skill, or who rejected this case are already left out of the ranking.
+      if (ranking.ranking.length > 0) {
         throw new AppException('INTERNAL_AVAILABLE', 'An internal technician is available; assign one of them', 409, {
-          available: free.length,
+          available: ranking.ranking.length,
         });
       }
 
@@ -280,9 +282,15 @@ export class AssignmentsService {
         emergency_rate: true,
         user: { select: { first_name: true, last_name: true, is_active: true } },
         skills: { select: { proficiency_level: true, skill: { select: { category: true } } } },
-        assignments: { where: { status: { in: ACTIVE_JOB } }, select: { id: true }, take: 1 },
+        assignments: { where: { status: { in: ACTIVE_JOB } }, select: { id: true } },
       },
     });
+    // Technicians who already rejected this case cannot be offered it again.
+    const rejections = await db.assignment.findMany({
+      where: { request_id: request.id, status: AssignmentStatus.REJECTED, technician_profile_id: { not: null } },
+      select: { technician_profile_id: true },
+    });
+    const rejectedBy = new Set(rejections.map((r) => r.technician_profile_id));
 
     const technicians: TechnicianInput[] = profiles.map((p) => ({
       technicianProfileId: p.id,
@@ -297,7 +305,8 @@ export class AssignmentsService {
       normalRate: p.normal_rate.toNumber(),
       emergencyRate: p.emergency_rate.toNumber(),
       skills: p.skills.map((s) => ({ category: s.skill.category, proficiency: s.proficiency_level })),
-      hasActiveJob: p.assignments.length > 0,
+      activeAssignments: p.assignments.length,
+      rejectedThisCase: rejectedBy.has(p.id),
     }));
 
     return rankTechnicians(

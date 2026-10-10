@@ -8,6 +8,8 @@ module.exports = {
   globalSetup: '<rootDir>/test/global-setup.ts',
   globalTeardown: '<rootDir>/test/global-teardown.ts',
   setupFiles: ['<rootDir>/test/e2e-env.ts'],
+  // Empties every table before each test file so files that reuse the same test emails cannot collide.
+  setupFilesAfterEnv: ['<rootDir>/test/e2e-clean-db.ts'],
   testTimeout: 60000,
   maxWorkers: 1,
 };

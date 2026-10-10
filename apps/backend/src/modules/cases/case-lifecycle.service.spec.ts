@@ -1,13 +1,17 @@
 import { NotFoundException } from '@nestjs/common';
-import { AuditAction, RequestStatus } from '@prisma/client';
+import { AuditAction, RequestPriority, RequestStatus } from '@prisma/client';
 import { ALLOWED_TRANSITIONS, CaseLifecycleService } from './case-lifecycle.service';
 
 const S = RequestStatus;
 
-function setup(currentStatus: RequestStatus | null = S.NEW, updateCount = 1) {
+function setup(
+  currentStatus: RequestStatus | null = S.NEW,
+  updateCount = 1,
+  priority: RequestPriority = RequestPriority.NORMAL,
+) {
   const tx = {
     maintenanceRequest: {
-      findUnique: jest.fn().mockResolvedValue(currentStatus ? { status: currentStatus } : null),
+      findUnique: jest.fn().mockResolvedValue(currentStatus ? { status: currentStatus, priority } : null),
       updateMany: jest.fn().mockResolvedValue({ count: updateCount }),
     },
     requestStatusHistory: { create: jest.fn().mockResolvedValue({}) },
@@ -19,7 +23,7 @@ function setup(currentStatus: RequestStatus | null = S.NEW, updateCount = 1) {
 describe('CaseLifecycleService', () => {
   describe('transition table', () => {
     it('matches the documented lifecycle', () => {
-      expect(ALLOWED_TRANSITIONS[S.NEW]).toEqual([S.UNDER_REVIEW, S.CANCELLED]);
+      expect(ALLOWED_TRANSITIONS[S.NEW]).toEqual([S.UNDER_REVIEW, S.APPROVED, S.REJECTED, S.CANCELLED]);
       expect(ALLOWED_TRANSITIONS[S.UNDER_REVIEW]).toEqual([S.REQUIRES_FOLLOW_UP, S.APPROVED, S.REJECTED, S.CANCELLED]);
       expect(ALLOWED_TRANSITIONS[S.REQUIRES_FOLLOW_UP]).toEqual([S.UNDER_REVIEW, S.CANCELLED]);
       expect(ALLOWED_TRANSITIONS[S.APPROVED]).toEqual([S.ASSIGNED, S.CANCELLED]);
@@ -33,9 +37,18 @@ describe('CaseLifecycleService', () => {
       expect(ALLOWED_TRANSITIONS[S.IN_PROGRESS]).toEqual([S.COMPLETED]);
     });
 
+    it('lets only an EMERGENCY case skip review (NEW -> APPROVED), and any case be rejected from NEW', () => {
+      const { service } = setup();
+      expect(service.canTransition(S.NEW, S.APPROVED, RequestPriority.EMERGENCY)).toBe(true);
+      expect(service.canTransition(S.NEW, S.REJECTED, RequestPriority.NORMAL)).toBe(true);
+      expect(service.canTransition(S.NEW, S.REJECTED, RequestPriority.EMERGENCY)).toBe(true);
+    });
+
     it('cannot skip steps', () => {
       const { service } = setup();
       expect(service.canTransition(S.NEW, S.APPROVED)).toBe(false);
+      expect(service.canTransition(S.NEW, S.APPROVED, RequestPriority.NORMAL)).toBe(false);
+      expect(service.canTransition(S.NEW, S.APPROVED, RequestPriority.URGENT)).toBe(false);
       expect(service.canTransition(S.NEW, S.COMPLETED)).toBe(false);
       expect(service.canTransition(S.APPROVED, S.IN_PROGRESS)).toBe(false);
     });
@@ -82,11 +95,41 @@ describe('CaseLifecycleService', () => {
       expect(audit.log).toHaveBeenCalled();
     });
 
+    it('approves an EMERGENCY case straight from NEW', async () => {
+      const { service, tx } = setup(S.NEW, 1, RequestPriority.EMERGENCY);
+      await expect(
+        service.transition(tx as never, { requestId: 'r1', to: S.APPROVED, actorId: 'd1' }),
+      ).resolves.toEqual({ from: S.NEW, to: S.APPROVED });
+      expect(tx.maintenanceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: 'r1', status: S.NEW },
+        data: { status: S.APPROVED },
+      });
+    });
+
+    it.each([RequestPriority.NORMAL, RequestPriority.URGENT])(
+      'refuses to approve a %s case straight from NEW (it must be reviewed first)',
+      async (priority) => {
+        const { service, tx, audit } = setup(S.NEW, 1, priority);
+        await expect(
+          service.transition(tx as never, { requestId: 'r1', to: S.APPROVED, actorId: 'd1' }),
+        ).rejects.toMatchObject({ code: 'INVALID_TRANSITION', details: { from: S.NEW, to: S.APPROVED } });
+        expect(tx.maintenanceRequest.updateMany).not.toHaveBeenCalled();
+        expect(audit.log).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects a case straight from NEW', async () => {
+      const { service, tx } = setup(S.NEW);
+      await expect(
+        service.transition(tx as never, { requestId: 'r1', to: S.REJECTED, actorId: 'd1', reason: 'Out of scope' }),
+      ).resolves.toEqual({ from: S.NEW, to: S.REJECTED });
+    });
+
     it('refuses an illegal move with 409 INVALID_TRANSITION and writes nothing', async () => {
       const { service, tx, audit } = setup(S.NEW);
       await expect(
-        service.transition(tx as never, { requestId: 'r1', to: S.APPROVED, actorId: 'd1' }),
-      ).rejects.toMatchObject({ code: 'INVALID_TRANSITION', details: { from: S.NEW, to: S.APPROVED } });
+        service.transition(tx as never, { requestId: 'r1', to: S.COMPLETED, actorId: 'd1' }),
+      ).rejects.toMatchObject({ code: 'INVALID_TRANSITION', details: { from: S.NEW, to: S.COMPLETED } });
       expect(tx.maintenanceRequest.updateMany).not.toHaveBeenCalled();
       expect(tx.requestStatusHistory.create).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();

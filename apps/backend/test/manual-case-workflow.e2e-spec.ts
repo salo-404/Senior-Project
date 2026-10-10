@@ -360,6 +360,38 @@ describe('Stage 2: manual customer-to-dispatcher case workflow (e2e, throwaway d
         .expect(400);
     });
 
+    it('lets the dispatcher approve an emergency straight from NEW, and reject any case straight from NEW', async () => {
+      // NOTE(plan-alignment): UNDER_REVIEW means the dispatcher is checking a case directly. An emergency does not
+      // need that step: the dispatcher approves it from NEW. A normal or urgent case still has to be reviewed first.
+      const addr = await address('custB');
+      const eq = await equipment('custB', addr.id);
+      const emergency = (
+        await http()
+          .post(`${API}/requests/emergency`)
+          .set(as('custB'))
+          .send({ equipment_id: eq.id, description: 'Smoke and a burning smell', contact_preference: 'FORM' })
+          .expect(201)
+      ).body as { id: string };
+
+      const approved = await review(emergency.id, { action: 'APPROVE' }).expect(200);
+      expect(approved.body.status).toBe('APPROVED');
+      expect(approved.body.status_history.map((h: { from_status: string | null; to_status: string }) => [h.from_status, h.to_status])).toEqual([
+        [null, 'NEW'],
+        ['NEW', 'APPROVED'],
+      ]);
+      expect(approved.body.case.verified_by).toBe(ids.dispatcher);
+
+      // a normal case cannot skip review
+      const normal = await newCase('custB', eq.id, addr.id);
+      const refused = await review(normal.id, { action: 'APPROVE' }).expect(409);
+      expect(refused.body.error.code).toBe('INVALID_TRANSITION');
+
+      // rejecting straight from NEW needs a reason
+      await review(normal.id, { action: 'REJECT' }).expect(400);
+      const rejected = await review(normal.id, { action: 'REJECT', reason: 'Not something we repair' }).expect(200);
+      expect(rejected.body).toMatchObject({ status: 'REJECTED', rejection_reason: 'Not something we repair' });
+    });
+
     it('blocks normal and urgent requests while there is an unpaid balance, but lets an emergency through with a flag', async () => {
       await createUser('custDebt', Role.CUSTOMER);
       await prisma.customerProfile.update({ where: { user_id: ids.custDebt }, data: { has_unpaid_balance: true, unpaid_amount: 25 } });
