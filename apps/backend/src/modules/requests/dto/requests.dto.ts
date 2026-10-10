@@ -31,6 +31,12 @@ export class CreateRequestDto {
   language?: string;
 }
 
+/** The customer's answer to the fixed safety question ("Is there a burning smell right now?"). */
+export class SafetyConfirmDto {
+  @IsIn(['yes', 'no'])
+  answer!: 'yes' | 'no';
+}
+
 /** The simplified EMERGENCY form: no title (the backend generates one) and no AI. */
 export class CreateEmergencyDto {
   @IsUUID()

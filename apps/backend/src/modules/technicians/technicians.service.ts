@@ -17,6 +17,7 @@ import { uniqueViolationFields } from '../../common/prisma-errors';
 import { AuditService } from '../../infra/audit/audit.service';
 import { TechnicianProfileStatusPort } from '../../infra/auth/technician-profile-status.port';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { CommissionTiersService } from '../billing/commission-tiers.service';
 import {
   ApplicationDetailsDto,
   DecideApplicationDto,
@@ -52,6 +53,7 @@ export class TechniciansService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly tiers: CommissionTiersService,
   ) {}
 
   // ---------------------------------------------------------------- signup and re-apply
@@ -342,18 +344,16 @@ export class TechniciansService {
     const found = await this.prisma.skill.count({ where: { id: { in: skillIds } } });
     if (found !== skillIds.length) throw new AppException('UNKNOWN_SKILL', 'One or more skills do not exist', 400);
 
-    const proposed = details.proposed_tier
-      ? await this.prisma.commissionTier.findUnique({ where: { name: details.proposed_tier }, select: { id: true } })
-      : null;
+    const proposed = details.proposed_tier ? await this.tiers.findByName(details.proposed_tier) : null;
     return { skillIds, proposedTierId: proposed?.id ?? null };
   }
 
   private async resolveTier(requested: CommissionTierName | undefined, proposedId: string | null) {
     const tier = requested
-      ? await this.prisma.commissionTier.findUnique({ where: { name: requested } })
+      ? await this.tiers.findByName(requested)
       : proposedId
-        ? await this.prisma.commissionTier.findUnique({ where: { id: proposedId } })
-        : await this.prisma.commissionTier.findUnique({ where: { name: CommissionTierName.BRONZE } });
+        ? await this.tiers.findById(proposedId)
+        : await this.tiers.findByName(CommissionTierName.BRONZE);
     if (!tier) throw new AppException('TIER_NOT_CONFIGURED', 'The commission tier is not configured', 400);
     return tier;
   }

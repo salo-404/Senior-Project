@@ -8,6 +8,7 @@ import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { SMOKE_REDIS_URL, SMOKE_STORAGE_ENDPOINT, probeRedis, probeStorage, storageCredentials } from './smoke-probe';
 
 function baseUrl(): URL {
   let raw = process.env.E2E_ADMIN_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -44,6 +45,26 @@ export default async function globalSetup(): Promise<void> {
     env: { ...process.env, DATABASE_URL: testUrl.toString() },
     stdio: 'pipe',
   });
+
+  // Smoke tests for the Docker Redis and object storage: skipped, with a message, when a service is not running.
+  const [redisUp, storageUp] = await Promise.all([probeRedis(), probeStorage()]);
+  process.env.E2E_SMOKE_REDIS_UP = redisUp ? '1' : '0';
+  process.env.E2E_SMOKE_STORAGE_UP = storageUp ? '1' : '0';
+  // Hand the resolved credentials to the test workers: e2e-env.ts overwrites STORAGE_ACCESS_KEY and
+  // STORAGE_SECRET_KEY with dummy values for every other test file.
+  const creds = storageUp ? storageCredentials() : null;
+  if (creds) {
+    process.env.E2E_SMOKE_STORAGE_ACCESS_KEY = creds.accessKey;
+    process.env.E2E_SMOKE_STORAGE_SECRET_KEY = creds.secretKey;
+  }
+  if (!redisUp) {
+    console.warn(`\n[e2e smoke] Redis is not reachable at ${SMOKE_REDIS_URL}: the Redis smoke test will be SKIPPED. Start it with: docker compose up -d redis`);
+  }
+  if (!storageUp) {
+    console.warn(
+      `\n[e2e smoke] Object storage is not reachable at ${SMOKE_STORAGE_ENDPOINT} (or STORAGE_ACCESS_KEY / STORAGE_SECRET_KEY are missing): the storage smoke test will be SKIPPED. Start it with: docker compose up -d storage`,
+    );
+  }
 
   // Inherited by the test workers, which start after global setup.
   process.env.E2E_DATABASE_URL = testUrl.toString();

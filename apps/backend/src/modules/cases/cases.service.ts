@@ -17,6 +17,7 @@ import { AuditService } from '../../infra/audit/audit.service';
 import { NotificationsService } from '../../infra/notifications/notifications.service';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { CaseLifecycleService } from './case-lifecycle.service';
+import { confirmationOf } from './customer-confirmation';
 import { CancelCaseDto, FollowUpResponseDto, ListCasesQuery, ReviewCaseDto, UpdateCaseDto } from './dto/cases.dto';
 
 const isStaff = (user: AuthenticatedUser) => user.roles.includes(Role.DISPATCHER) || user.roles.includes(Role.MANAGER);
@@ -91,7 +92,8 @@ export class CasesService {
       },
     });
     if (!request) throw new NotFoundException('Case not found');
-    return request;
+    // Customer confirmed / corrected (with the note) / not confirmed yet. Informational: the dispatcher is never blocked.
+    return { ...request, customer_confirmation: confirmationOf(request.case) };
   }
 
   // ---------------------------------------------------------------- dispatcher actions
@@ -106,6 +108,12 @@ export class CasesService {
         throw new AppException('NOT_UNDER_REVIEW', 'A case can be edited only while it is under review', 409);
       }
 
+      const before = await tx.maintenanceCase.findUniqueOrThrow({
+        where: { request_id: id },
+        select: { id: true, summary: true, urgency_level: true, symptoms: true, possible_causes: true },
+      });
+      const requestBefore = await tx.maintenanceRequest.findUniqueOrThrow({ where: { id }, select: { problem_type: true } });
+
       const caseData: Prisma.MaintenanceCaseUpdateInput = {
         summary: dto.summary,
         urgency_level: dto.urgency_level,
@@ -115,6 +123,34 @@ export class CasesService {
       await tx.maintenanceCase.update({ where: { request_id: id }, data: caseData });
       if (dto.problem_type !== undefined) {
         await tx.maintenanceRequest.update({ where: { id }, data: { problem_type: dto.problem_type } });
+      }
+
+      // Every dispatcher edit is audited with the old and new values, in this same transaction. It comes before
+      // the escalation below, so a failure anywhere after it rolls back the edit and its audit row together.
+      const oldValue: Record<string, unknown> = {};
+      const newValue: Record<string, unknown> = {};
+      for (const field of ['summary', 'urgency_level', 'symptoms', 'possible_causes'] as const) {
+        if (dto[field] !== undefined) {
+          oldValue[field] = before[field] ?? null;
+          newValue[field] = dto[field];
+        }
+      }
+      if (dto.problem_type !== undefined) {
+        oldValue.problem_type = requestBefore.problem_type;
+        newValue.problem_type = dto.problem_type;
+      }
+      if (Object.keys(newValue).length > 0) {
+        await this.audit.log(
+          {
+            actorId: user.id,
+            action: AuditAction.CASE_UPDATED,
+            entityType: 'maintenance_case',
+            entityId: before.id,
+            oldValue: JSON.parse(JSON.stringify(oldValue)) as Prisma.InputJsonValue,
+            newValue: JSON.parse(JSON.stringify(newValue)) as Prisma.InputJsonValue,
+          },
+          tx,
+        );
       }
 
       if (dto.urgency_level === UrgencyLevel.HIGH || dto.urgency_level === UrgencyLevel.CRITICAL) {

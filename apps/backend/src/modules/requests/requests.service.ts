@@ -28,6 +28,7 @@ import { CreateEmergencyDto, CreateRequestDto } from './dto/requests.dto';
 /** Photos can be added only while the dispatcher can still use them. */
 const PHOTO_STATUSES: RequestStatus[] = [RequestStatus.NEW, RequestStatus.UNDER_REVIEW, RequestStatus.REQUIRES_FOLLOW_UP];
 export const MAX_PHOTOS_PER_REQUEST = 5;
+const CLOSED_STATUSES: RequestStatus[] = [RequestStatus.COMPLETED, RequestStatus.CANCELLED, RequestStatus.REJECTED];
 
 const REQUEST_INCLUDE = { case: true, equipment: { include: { equipment_type: true } }, address: true } as const;
 
@@ -85,7 +86,7 @@ export class RequestsService {
 
       // Only a clear Yes to the form's safety question escalates; a keyword alone never does.
       const escalated = this.safety.evaluateIntake(dto.intake_answers).hit;
-      if (escalated) await this.lifecycle.escalate(tx, request.id, customer.id, 'Customer answered Yes to the safety question');
+      if (escalated) await this.lifecycle.escalate(tx, request.id, customer.id, 'Customer answered Yes to the safety question', { raisePriority: true });
 
       return { request: await this.load(tx, request.id), escalated, unpaidAmountCents: balance.unpaidAmountCents };
     });
@@ -136,6 +137,42 @@ export class RequestsService {
 
     await this.notifyDispatchers(submitted, true);
     return submitted.request;
+  }
+
+  // ---------------------------------------------------------------- safety confirmation
+
+  /**
+   * The customer's answer to the fixed safety question. A keyword never escalates on its own; only this clear "yes" does,
+   * through the existing escalate path: EMERGENCY priority, is_safety_escalated, a SAFETY_ESCALATED audit row, and
+   * every dispatcher notified (after the transaction commits). "no" changes nothing. Answering "yes" twice is harmless.
+   */
+  async confirmSafety(customer: AuthenticatedUser, requestId: string, answer: 'yes' | 'no') {
+    const request = await this.prisma.maintenanceRequest.findFirst({
+      where: { id: requestId, customer_id: customer.id },
+      select: { id: true, title: true, status: true, priority: true, is_safety_escalated: true },
+    });
+    // Someone else's request is a 404 so its existence is not revealed.
+    if (!request) throw new NotFoundException('Request not found');
+
+    if (answer === 'no') {
+      return { id: request.id, escalated: request.is_safety_escalated, priority: request.priority, changed: false };
+    }
+    if (CLOSED_STATUSES.includes(request.status)) {
+      throw new AppException('CASE_CLOSED', 'This case is closed', 409);
+    }
+
+    const changed = await this.prisma.runInTransaction((tx) =>
+      this.lifecycle.escalate(tx, requestId, customer.id, 'Customer confirmed a safety danger', { raisePriority: true }),
+    );
+    if (changed) {
+      await this.notifications.notifyRole(Role.DISPATCHER, NotificationType.SAFETY_ESCALATED, {
+        title: `Safety escalation: ${request.title}`,
+        body: 'The customer confirmed a safety danger.',
+        requestId,
+        priority: NotificationPriority.URGENT,
+      });
+    }
+    return { id: request.id, escalated: true, priority: RequestPriority.EMERGENCY, changed };
   }
 
   // ---------------------------------------------------------------- photos

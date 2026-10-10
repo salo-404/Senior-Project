@@ -97,11 +97,18 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
     await login(key);
   }
 
-  /** A customer case taken through the dispatcher review to APPROVED. */
-  async function approvedCase(emergency = false): Promise<string> {
+  /** A customer case taken through the dispatcher review to APPROVED. `kind`: true = emergency, 'URGENT', or normal. */
+  async function approvedCase(kind: boolean | 'URGENT' = false): Promise<string> {
+    const emergency = kind === true;
     const body = emergency
       ? { equipment_id: equipmentId, address_id: addressId, description: 'Smoke from the unit', contact_preference: 'FORM' }
-      : { equipment_id: equipmentId, address_id: addressId, title: 'AC not cooling', description: 'The AC blows warm air since yesterday.' };
+      : {
+          equipment_id: equipmentId,
+          address_id: addressId,
+          title: 'AC not cooling',
+          description: 'The AC blows warm air since yesterday.',
+          ...(kind === 'URGENT' ? { priority: 'URGENT' } : {}),
+        };
     const created = await http().post(`${API}/requests${emergency ? '/emergency' : ''}`).set(as('customer')).send(body).expect(201);
     const id = created.body.id as string;
     await http().post(`${API}/cases/${id}/review`).set(as('dispatcher')).send({ action: 'START' }).expect(200);
@@ -421,7 +428,8 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
         .set(as('dispatcher'))
         .send({ external_name: 'Fixit Co', external_phone: '+96170123456' })
         .expect(409);
-      expect(wrongKind.body.error.code).toBe('EXTERNAL_ONLY_FOR_EMERGENCY');
+      // NOTE(plan-alignment): URGENT may use an external technician too; only a NORMAL case is refused.
+      expect(wrongKind.body.error.code).toBe('EXTERNAL_NOT_ALLOWED');
 
       const emergency = await approvedCase(true);
       const free = await http()
@@ -467,6 +475,28 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
         const stored = await prisma.assignment.findUniqueOrThrow({ where: { id: res.body.id } });
         expect(stored.accepted_at).not.toBeNull();
         expect((stored.ranking_snapshot as Record<string, any>).external).toBe(true);
+      } finally {
+        await setAllAvailability(true);
+        await prisma.technicianProfile.updateMany({ where: { id: { in: [profileIds.off] } }, data: { is_available: false } });
+      }
+    });
+
+    it('is allowed for an URGENT case once no internal technician is eligible, and refused while one is', async () => {
+      const urgent = await approvedCase('URGENT');
+      const external = () =>
+        http()
+          .post(`${API}/cases/${urgent}/assignments/external`)
+          .set(as('dispatcher'))
+          .send({ external_name: 'Fixit Co', external_phone: '+96170123456', note: 'Urgent, nobody free' });
+
+      const free = await external().expect(409);
+      expect(free.body.error.code).toBe('INTERNAL_AVAILABLE');
+
+      await setAllAvailability(false);
+      try {
+        const res = await external().expect(201);
+        expect(res.body).toMatchObject({ is_external: true, status: 'ACCEPTED', technician_profile_id: null });
+        expect(res.body.request).toMatchObject({ status: 'ASSIGNED', priority: 'URGENT' });
       } finally {
         await setAllAvailability(true);
         await prisma.technicianProfile.updateMany({ where: { id: { in: [profileIds.off] } }, data: { is_available: false } });

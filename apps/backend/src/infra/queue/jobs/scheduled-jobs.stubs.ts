@@ -25,11 +25,4 @@ export class InterviewInactivityJob {
   }
 }
 
-/** TODO(technicians module, week 2): nightly, propose a TIER_UPDATE when stats pass a tier threshold. */
-@Injectable()
-export class TierSuggestionJob {
-  @Interval(24 * 60 * 60 * 1000)
-  run(): void {
-    // TODO: implemented with the technicians module.
-  }
-}
+// TierSuggestionJob is implemented in modules/technicians/tier-suggestion.job.ts.

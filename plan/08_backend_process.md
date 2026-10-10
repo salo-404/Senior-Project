@@ -2,7 +2,7 @@
 
 How the backend works today, what is built, and the rules a developer or an AI agent must keep when changing it. The locked design is `maintAIn_Backend_Plan.md`; the schema authority is `Data_Base_Plan/DB_Schema.md`; per-decision reasons are in `docs/backend/BACKEND_DECISIONS.md`. If this file and the code disagree, fix whichever is wrong in the same change.
 
-Last updated: 2026-10-10.
+Last updated: 2026-10-10 (Week 2 finalization).
 
 ## 1. Status
 
@@ -10,10 +10,10 @@ Last updated: 2026-10-10.
 | --- | --- |
 | Infrastructure: prisma, audit, queue, health, safety, notifications, storage, auth | Built and tested |
 | Users (profile, invite-only staff, activation, role change, unpaid balance helpers) | Built and tested |
-| Technicians: signup with application template, manager approve or reject, re-apply, availability switch | Built and tested |
+| Technicians: signup with application template, manager approve or reject, re-apply, availability switch, tier requests, rates, weekly schedule, skills, teams, nightly tier suggestion | Built and tested |
 | Addresses, equipment, customer requests (normal, urgent, emergency), photos | Built and tested |
-| Cases: list, details, dispatcher review, follow-up questions, customer cancel | Built and tested |
-| Dispatch: technician ranking, assignment, external technician, assignment list | Built and tested |
+| Cases: list, details, dispatcher review and edits (audited), follow-up questions, customer cancel, customer-confirmed summary, safety confirmation | Built and tested |
+| Dispatch: technician ranking, assignment, external technician (urgent or emergency), assignment list | Built and tested |
 | Pricing code (`billing/pricing`: money, labor, commission, invoice) | Built and tested, not yet connected to any route |
 | Jobs (accept, reject, start, delay, report), billing flows, reviews, reports | Not built |
 | AI module, knowledge base, Python worker | Not built (the manual path works without them) |
@@ -38,8 +38,8 @@ A role check is not an ownership check. The guard knows the caller is a customer
 | `config/` | Environment validation. The app refuses to start without the required variables. |
 | `common/` | Error filter, pagination, request context (correlation id), password and token helpers, `Db` type. |
 | `infra/` | Technical modules: `prisma`, `audit`, `queue`, `health`, `safety`, `notifications`, `storage`, `auth`. |
-| `modules/` | Business modules: `users`, `technicians`, `addresses`, `equipment`, `requests`, `cases`, `assignments`, `billing/pricing`. |
-| `modules/jobs`, `knowledge`, `reviews`, `skills`, `teams` | Empty stubs for later stages (names may be changed when built). |
+| `modules/` | Business modules: `users`, `technicians` (also skills and teams), `addresses`, `equipment`, `requests`, `cases`, `assignments`, `billing` (`CommissionTiersService` and `pricing/`). |
+| `modules/jobs`, `knowledge`, `reviews` | Empty stubs for later stages (names may be changed when built). |
 
 One owner per table: a module never reads another module's tables, it calls that module's exported service. `CaseLifecycleService` (in `cases/`) is the only code that changes a request's status. `AuditService.log` always receives the caller's transaction.
 
@@ -71,7 +71,7 @@ A customer submission becomes a request with a `MANUAL` case record. `status` is
 
 Every change goes through `CaseLifecycleService.transition`: it validates the move, updates with `WHERE status = <from>` (two parallel changes cannot both win; the loser gets 409 `CASE_CHANGED`), and writes `request_status_history` and the audit row in the caller's transaction.
 
-An emergency, or a dispatcher-assessed urgency of `HIGH` or `CRITICAL`, sets `is_safety_escalated` once and notifies every dispatcher. A keyword never escalates by itself; only the form's `safety_concern: true` or a confirmed danger does.
+An emergency, or a dispatcher-assessed urgency of `HIGH` or `CRITICAL`, sets `is_safety_escalated` once and notifies every dispatcher. A keyword never escalates by itself; only the form's `safety_concern: true` or a confirmed danger does, and both also raise the priority to EMERGENCY.
 
 ## 6. Dispatch and technician ranking
 
@@ -104,7 +104,7 @@ URGENT uses the normal weights. Ties break by more experience, then the lower ra
 
 **Assigning:** the dispatcher may pick any listed technician, not only the top one. In one transaction the case is claimed (`APPROVED -> ASSIGNED`, conditional), the assignment is created `PENDING` with `ranking_snapshot` (the ranking the dispatcher saw, the weights, the choice, `overridden` and an optional note), and an audit row is written. After commit the technician and the customer are notified. Two dispatchers clicking at the same moment cannot both assign.
 
-**External technician:** `POST /cases/:id/assignments/external`, EMERGENCY cases only, and only when the ranking is empty (no internal technician can take it). It records a name and phone, no profile or login, status `ACCEPTED`, and no commission, ledger or review will follow.
+**External technician:** `POST /cases/:id/assignments/external`, URGENT or EMERGENCY cases (a NORMAL case is refused), and only when the ranking is empty (no internal technician can take it). It records a name and phone, no profile or login, status `ACCEPTED`, and no commission, ledger or review will follow.
 
 ## 7. Routes (all under `/api/v1`)
 
@@ -115,9 +115,12 @@ URGENT uses the normal weights. Ties break by more experience, then the lower ra
 | Users | `GET` and `PATCH /users/me`; `POST /users`, `GET /users`, `PATCH /users/:id/deactivate`, `PATCH /users/:id/role` | Signed in; the rest manager only |
 | Notifications | `GET /notifications`, `GET /notifications/unread-count`, `POST /notifications/read-all`, `PATCH /notifications/:id/read` | Signed in, own only |
 | Attachments | `GET /attachments/:id/url` | Uploader, the request's customer, dispatcher, manager |
-| Technicians | `GET /skills` (public); `GET /technician-applications/mine`, `POST /technician-applications/reapply`; `PATCH /technicians/:id/availability`; `GET /technician-tier-requests`, `GET` and `PATCH /technician-tier-requests/:id` | Technician; availability also dispatcher; tier requests manager |
+| Technicians | `GET /skills` (public); `GET /technician-applications/mine`, `POST /technician-applications/reapply`; `PATCH /technicians/:id/availability`; `GET /technician-tier-requests`, `GET` and `PATCH /technician-tier-requests/:id` (initial applications) | Technician; availability also dispatcher; applications manager |
+| Tier requests | `POST /technicians/me/tier-requests`; `GET /manager/tier-requests`; `POST /tier-requests/:id/decide` | Technician; the other two manager |
+| Technician profile | `PATCH /technicians/:id/rates`; `PUT /technicians/:id/skills`; `PUT /technicians/:id/schedule` | Manager; the schedule also the technician (own) |
+| Catalogue | `POST /skills`, `POST /teams`, `POST /teams/:id/members` | Manager |
 | Addresses, equipment | `GET`, `POST`, `PATCH /addresses`; `GET /equipment-types`; `GET`, `POST`, `PATCH /equipment` | Customer (equipment types: any signed-in user) |
-| Requests | `POST /requests`, `POST /requests/emergency`, `POST /requests/:id/photos` | Customer |
+| Requests | `POST /requests`, `POST /requests/emergency`, `POST /requests/:id/photos`, `POST /requests/:id/safety-confirm`, `GET /requests/:id/summary`, `POST /requests/:id/summary/confirm` | Customer (own requests only) |
 | Cases | `GET /cases`, `GET /cases/:id`; `PATCH /cases/:id`, `POST /cases/:id/review`; `POST /cases/:id/follow-up-response`, `POST /cases/:id/cancel` | Reading: customer (own), dispatcher, manager. Edit and review: dispatcher. Answer and cancel: customer. |
 | Dispatch | `GET /cases/:id/technician-ranking`, `POST /cases/:id/assignments`, `POST /cases/:id/assignments/external`; `GET /assignments` | Dispatcher; the list also technician (own) and manager |
 
@@ -129,15 +132,17 @@ URGENT uses the normal weights. Ties break by more experience, then the lower ra
 | `npm run test:e2e` | End-to-end tests in `test/` against a throwaway database. |
 | `npm run seed` | Creates the first manager from `SEED_MANAGER_EMAIL` and `SEED_MANAGER_PASSWORD`. |
 | `npm run seed:reference` | Skills, commission tiers and equipment types. |
+| `docker compose up -d redis storage` | Optional: lets the Redis and storage smoke tests run instead of being skipped. |
 
 How e2e isolation works, and why:
 
 - `test/global-setup.ts` creates a database named `maintain_e2e_<random>` on the server in `DATABASE_URL`, applies every migration to it, and `global-teardown.ts` drops it. The development database is never touched.
 - All e2e files share that one database, and most create users with the same emails (`custA@test.dev`, `dispatcher@test.dev`, ...). Before each file, `test/e2e-clean-db.ts` empties every table (`TRUNCATE ... CASCADE`, keeping only the migrations table), so the files cannot collide and can run in any order. It refuses to run against a database that is not a `maintain_e2e_*` one.
 - Jest needs `--experimental-vm-modules` because NestJS 12 is ESM-only; the npm scripts set it.
-- Every e2e file runs with `AI_ENABLED=false`, no Redis and no object storage, so the manual path is proven to work without them.
+- Every e2e file except the smoke test runs with `AI_ENABLED=false`, no Redis and no object storage, so the manual path is proven to work without them.
+- `test/infra-smoke.e2e-spec.ts` talks to the real Docker Redis and object storage. `test/global-setup.ts` checks first whether they are reachable and prints a message; when one is not, its smoke test is skipped, never failed.
 
-Expected result: 305 unit tests and 67 e2e tests pass.
+Expected result: 409 unit tests and 97 e2e tests pass (2 of the e2e tests are skipped when Redis or storage is not running).
 
 ## 9. Changes made when Stage 2 and 3 were reviewed against the plan
 
@@ -160,12 +165,27 @@ Rules for the next developer or agent:
 - A new e2e file may use any emails: the database is emptied before it runs. It must not rely on rows left by another file.
 - Do not edit or delete applied Prisma migrations; add a new one.
 
-## 10. Open items
+## 10. Stage 2 finalization
 
-- **External technician for URGENT cases.** The backend plan (7.2) says URGENT or EMERGENCY; `plan/00_system_overview.md` and `DB_Schema.md` say emergencies only. The code allows EMERGENCY only. Decide and align the documents.
+| What | How it works |
+| --- | --- |
+| Customer summary | `GET /requests/:id/summary` shows device, problem, symptoms and the customer's safety answer, never possible causes or urgency. `POST /requests/:id/summary/confirm` with `{ confirmed: true }` or `{ confirmed: false, note }` records the answer and audits `CASE_CONFIRMED_BY_CUSTOMER`. It never lowers urgency or removes a safety flag. The dispatcher's case view shows `customer_confirmation` (confirmed, corrected with the note, or not confirmed) and is never blocked by it. |
+| Danger words in a correction | Only produce the fixed confirmation question in the response. Escalation happens only through `POST /requests/:id/safety-confirm` with a clear "yes" (EMERGENCY, flagged, dispatchers notified). |
+| Tier requests | A technician asks for a review (and may list new skills). A manager decides: `TIER_CHANGED` (new tier), `SKILLS_NOTED_ONLY` (skills added, commission unchanged) or `NO_CHANGE` (needs a reason). The technician is notified. Tier data is read through `billing/CommissionTiersService`. |
+| Nightly suggestion | At 02:00 a job proposes a tier request for technicians who meet every threshold of the next tier. It never changes a tier by itself. |
+| Profile edits | Rates (manager, audited, the ranking uses them at once), weekly schedule (validated, 422 on errors, null clears, the ranking ignores it), skills (manager), `updateStats` (called by the reviews module later). |
+| Skills and teams | Moved into `technicians`; the empty `skills/` and `teams/` folders are gone. |
+| Dispatcher case edits | Audited as `CASE_UPDATED` (old and new values) in the same transaction. Schema migration `schema_v4_3_case_updated`. |
+| External technician | Allowed for URGENT as well as EMERGENCY, only when no internal technician is eligible. |
+
+## 11. Open items
+
+- **`plan/00_system_overview.md`** and `plan/06_build_order.md` now say an external technician is for urgent or emergency cases (fixed).
+- **Schema gap:** `technician_tier_requests` has no column for requested skills, so a TIER_UPDATE stores them as JSON text in `supporting_notes`. A `requested_skill_ids` column would be cleaner.
 - **Visit-fee cancellation** (`IN_PROGRESS -> CANCELLED` by a dispatcher with a visit-fee invoice) is not in the lifecycle table yet; it belongs with the jobs and billing stages.
 - **Jobs stage:** technician accept, reject (returns the case to `APPROVED`), start, delay, report. Rejecting will be what `REJECTED_THIS_CASE` reacts to.
 - **Attachments:** the assigned technician cannot open case photos until the jobs stage.
-- **Object storage and Redis** are not exercised by the e2e tests (uploads are only tested up to the clean 503 when storage is down).
-- **Empty module stubs** (`jobs`, `knowledge`, `reviews`, `skills`, `teams`) do not match the plan's module names and should be renamed or removed when those stages start.
+- **Real object storage and Redis** are exercised only by the smoke tests, which need `docker compose up -d redis storage`. The BullMQ queue has no processors yet.
+- **Empty module stubs** (`jobs`, `knowledge`, `reviews`) are kept for their stages.
+- **Reviews hook:** `TechnicianProfileService.updateStats` is ready; the reviews module must provide the `ReviewStatsPort` and call it inside the transaction that creates or hides a review.
 - **Lockfiles:** the tracked `apps/backend/package-lock.json` is stale; the repo uses the root lockfile.

@@ -184,6 +184,7 @@ describe('Stage 2: manual customer-to-dispatcher case workflow (e2e, throwaway d
       const unsafe = await newCase('custA', eq.id, addr.id, { intake_answers: { safety_concern: true } });
       const detail = await http().get(`${API}/cases/${unsafe.id}`).set(as('dispatcher')).expect(200);
       expect(detail.body.is_safety_escalated).toBe(true);
+      expect(detail.body.priority).toBe('EMERGENCY'); // a Yes on the form is treated like a confirmed danger
       const note = await prisma.notification.findFirst({
         where: { user_id: ids.dispatcher, request_id: unsafe.id, notification_type: NotificationType.SAFETY_ESCALATED },
       });

@@ -159,6 +159,56 @@ describe('CaseLifecycleService', () => {
     });
   });
 
+  describe('escalate', () => {
+    function escalateSetup(flagged: number, raised = 0) {
+      const tx = {
+        maintenanceRequest: {
+          updateMany: jest.fn().mockResolvedValueOnce({ count: flagged }).mockResolvedValueOnce({ count: raised }),
+        },
+      };
+      const audit = { log: jest.fn().mockResolvedValue(undefined) };
+      return { service: new CaseLifecycleService(audit as never), tx, audit };
+    }
+
+    it('flags the case once and audits SAFETY_ESCALATED, leaving the priority alone by default', async () => {
+      const { service, tx, audit } = escalateSetup(1);
+      await expect(service.escalate(tx as never, 'r1', 'u1', 'Customer answered Yes')).resolves.toBe(true);
+      expect(tx.maintenanceRequest.updateMany).toHaveBeenCalledTimes(1);
+      expect(tx.maintenanceRequest.updateMany.mock.calls[0][0].where).toEqual({ id: 'r1', is_safety_escalated: false });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: AuditAction.SAFETY_ESCALATED, newValue: { reason: 'Customer answered Yes' } }),
+        tx,
+      );
+    });
+
+    it('returns false (and audits nothing) when the case was already escalated', async () => {
+      const { service, tx, audit } = escalateSetup(0);
+      await expect(service.escalate(tx as never, 'r1', 'u1', 'again')).resolves.toBe(false);
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
+    it('with raisePriority it also makes the case an EMERGENCY and records that in the audit row', async () => {
+      const { service, tx, audit } = escalateSetup(1, 1);
+      await expect(service.escalate(tx as never, 'r1', 'u1', 'Danger', { raisePriority: true })).resolves.toBe(true);
+      expect(tx.maintenanceRequest.updateMany.mock.calls[1][0]).toEqual({
+        where: { id: 'r1', priority: { not: RequestPriority.EMERGENCY } },
+        data: { priority: RequestPriority.EMERGENCY },
+      });
+      expect(audit.log.mock.calls[0][0].newValue).toEqual({ reason: 'Danger', priority: RequestPriority.EMERGENCY });
+    });
+
+    it('with raisePriority it still raises the priority of a case that was flagged earlier, and reports a change', async () => {
+      const { service, tx } = escalateSetup(0, 1);
+      await expect(service.escalate(tx as never, 'r1', 'u1', 'Danger', { raisePriority: true })).resolves.toBe(true);
+    });
+
+    it('with raisePriority it changes nothing for a case that is already an escalated EMERGENCY', async () => {
+      const { service, tx, audit } = escalateSetup(0, 0);
+      await expect(service.escalate(tx as never, 'r1', 'u1', 'Danger', { raisePriority: true })).resolves.toBe(false);
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+  });
+
   describe('recordCreated', () => {
     it('writes the first history row and the REQUEST_CREATED audit row', async () => {
       const { service, tx, audit } = setup();

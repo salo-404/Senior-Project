@@ -1,10 +1,10 @@
-import { Body, Controller, Param, ParseUUIDPipe, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, HttpCode, Param, ParseUUIDPipe, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/authenticated-user';
 import { CurrentUser, Roles } from '../../infra/auth/decorators';
 import { MAX_IMAGE_BYTES, UploadedImage } from '../../infra/storage/storage.service';
-import { CreateEmergencyDto, CreateRequestDto } from './dto/requests.dto';
+import { CreateEmergencyDto, CreateRequestDto, SafetyConfirmDto } from './dto/requests.dto';
 import { RequestsService } from './requests.service';
 
 @Roles(Role.CUSTOMER)
@@ -22,6 +22,13 @@ export class RequestsController {
   @Post('emergency')
   createEmergency(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateEmergencyDto) {
     return this.requests.createEmergency(user, dto);
+  }
+
+  /** Only a clear "yes" escalates (EMERGENCY, flagged, dispatchers notified). "no" does nothing. */
+  @HttpCode(200)
+  @Post(':id/safety-confirm')
+  safetyConfirm(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SafetyConfirmDto) {
+    return this.requests.confirmSafety(user, id, dto.answer);
   }
 
   /** multipart/form-data with one image in the "file" field. */

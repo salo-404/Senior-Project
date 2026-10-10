@@ -1,6 +1,6 @@
-# maintAIn Database Schema (v4.2)
+# maintAIn Database Schema (v4.3)
 
-Last updated: 2026-10-08. Describes the schema implemented in `apps/backend/prisma/schema.prisma` and its migrations (`init`, `schema_v4_fixes`, `schema_v4_1_auth_and_summary`, `schema_v4_2_audit_and_activation_index`). If this file and `schema.prisma` ever disagree, fix whichever is wrong in the same change.
+Last updated: 2026-10-10. Describes the schema implemented in `apps/backend/prisma/schema.prisma` and its migrations (`init`, `schema_v4_fixes`, `schema_v4_1_auth_and_summary`, `schema_v4_2_audit_and_activation_index`, `schema_v4_3_case_updated`). If this file and `schema.prisma` ever disagree, fix whichever is wrong in the same change.
 
 ## 1. Overview
 
@@ -60,7 +60,7 @@ The 38 in earlier drafts was a counting error: tables dropped during redesign we
 | `NotificationType` | `REQUEST_SUBMITTED`, `REQUEST_STATUS_CHANGED`, `ASSIGNMENT_CREATED`, `ASSIGNMENT_ACCEPTED`, `JOB_STARTED`, `JOB_COMPLETED`, `INVOICE_SUBMITTED`, `PAYMENT_CONFIRMED`, `PAYMENT_DISPUTED`, `SAFETY_ESCALATED`, `COMMISSION_CHARGED`, `TIER_CHANGED`, `SYSTEM` |
 | `ToolCallStatus` | `SUCCESS`, `FAILED`, `UNAUTHORIZED` |
 | `NotificationPriority` | `NORMAL`, `HIGH`, `URGENT` |
-| `AuditAction` | `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `USER_CREATED`, `USER_UPDATED`, `USER_DEACTIVATED`, `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, `PASSWORD_CHANGED`, `REQUEST_CREATED`, `REQUEST_STATUS_CHANGED`, `REQUEST_CANCELLED`, `CASE_VERIFIED`, `CASE_CREATED_MANUAL`, `CASE_CONFIRMED_BY_CUSTOMER`, `ASSIGNMENT_CREATED`, `ASSIGNMENT_ACCEPTED`, `ASSIGNMENT_STARTED`, `ASSIGNMENT_REJECTED`, `ASSIGNMENT_CANCELLED`, `JOB_REPORT_SUBMITTED`, `INVOICE_CONFIRMED_BY_CUSTOMER`, `INVOICE_DISPUTED`, `INVOICE_CONFIRMED_ON_BEHALF`, `INVOICE_PHOTO_SUBMITTED`, `PAYMENT_CONFIRMED`, `PAYMENT_DISPUTED`, `TECHNICIAN_APPROVED`, `TECHNICIAN_REJECTED`, `TIER_CHANGED`, `COMMISSION_CHARGED`, `COMMISSION_PAYMENT_RECORDED`, `ATTACHMENT_DELETED`, `KNOWLEDGE_PROMOTED`, `AI_TOOL_CALL`, `SAFETY_ESCALATED`, `EMERGENCY_DOWNGRADED` |
+| `AuditAction` | `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `USER_CREATED`, `USER_UPDATED`, `USER_DEACTIVATED`, `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, `PASSWORD_CHANGED`, `REQUEST_CREATED`, `REQUEST_STATUS_CHANGED`, `REQUEST_CANCELLED`, `CASE_VERIFIED`, `CASE_CREATED_MANUAL`, `CASE_UPDATED`, `CASE_CONFIRMED_BY_CUSTOMER`, `ASSIGNMENT_CREATED`, `ASSIGNMENT_ACCEPTED`, `ASSIGNMENT_STARTED`, `ASSIGNMENT_REJECTED`, `ASSIGNMENT_CANCELLED`, `JOB_REPORT_SUBMITTED`, `INVOICE_CONFIRMED_BY_CUSTOMER`, `INVOICE_DISPUTED`, `INVOICE_CONFIRMED_ON_BEHALF`, `INVOICE_PHOTO_SUBMITTED`, `PAYMENT_CONFIRMED`, `PAYMENT_DISPUTED`, `TECHNICIAN_APPROVED`, `TECHNICIAN_REJECTED`, `TIER_CHANGED`, `COMMISSION_CHARGED`, `COMMISSION_PAYMENT_RECORDED`, `ATTACHMENT_DELETED`, `KNOWLEDGE_PROMOTED`, `AI_TOOL_CALL`, `SAFETY_ESCALATED`, `EMERGENCY_DOWNGRADED` |
 
 ## 4. Tables
 
@@ -129,7 +129,7 @@ Rules: a request is the raw submission and a case is the structured record; a re
 - **`job_reports`**: `assignment_id` (unique), `diagnosis?`, `work_done?`, `parts_used?` (JSON list of name, quantity, unit cost), `ai_analysis_was_helpful?`, `notes?`, `submitted_at?`.
 - **`job_costs`**: `assignment_id` (unique), `hours_worked?`, `hourly_rate_used?`, `rate_type?`, `extra_visits`, `manual_labor_cost?`, `is_visit_fee_only` (default false), `parts_cost`, `labor_cost`, `total_cost`, `invoice_lines?` (JSON), `invoice_status`, `customer_confirmed_at?`, `confirmed_on_behalf_by?`, `dispute_reason?`, `payment_status`, `payment_method` (default `CASH`), `invoice_submitted_at?`, `invoice_submitted_by?`, `payment_confirmed_by?`, `payment_confirmed_at?`. Index on `(invoice_status, payment_status)`.
 
-Assignment rules: only dispatchers create assignments; AI recommends nothing it computes itself. Normal jobs use registered technicians; an external technician is allowed only for emergencies when no internal technician is available, has no profile or login, and the assignment is for tracking. When `is_external = true`, `external_name` and `external_phone` are required and `technician_profile_id` is null. Only one assignment per request may be `PENDING`, `ACCEPTED`, or `IN_PROGRESS`. A technician rejection marks the assignment `REJECTED` and returns the request to `APPROVED`. External jobs get no review, commission, or ledger entry, and the dispatcher fills the job report from a phone call.
+Assignment rules: only dispatchers create assignments; AI recommends nothing it computes itself. Normal jobs use registered technicians; an external technician is allowed only for urgent or emergency requests when no internal technician is eligible, has no profile or login, and the assignment is for tracking. When `is_external = true`, `external_name` and `external_phone` are required and `technician_profile_id` is null. Only one assignment per request may be `PENDING`, `ACCEPTED`, or `IN_PROGRESS`. A technician rejection marks the assignment `REJECTED` and returns the request to `APPROVED`. External jobs get no review, commission, or ledger entry, and the dispatcher fills the job report from a phone call.
 
 Cost rules (backend-owned): internal jobs use `labor_cost = hours_worked x hourly_rate_used` plus `extra_visits x hourly_rate_used`, where the rate is `emergency_rate` for emergency requests and `normal_rate` otherwise, recorded with `rate_type`. External jobs set `manual_labor_cost` and leave hours and rate empty. `parts_cost` is the sum of quantity times unit cost in `parts_used`. `total_cost = labor_cost + parts_cost`. There is no base price.
 
@@ -242,6 +242,10 @@ Rate score: `1 - (rate - min) / (max - min)` across candidates; `1.0` for all wh
 1. `audit_action` enum gains `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, and `ATTACHMENT_DELETED` (each in its own `ALTER TYPE ... ADD VALUE` statement).
 2. Unique index `users_activation_token_hash_key` on `users.activation_token_hash`, so activation is an index lookup. Nulls are allowed to repeat; only real hashes must be unique.
 
+### v4.3 migration (`schema_v4_3_case_updated`)
+
+1. `audit_action` enum gains `CASE_UPDATED` (its own `ALTER TYPE ... ADD VALUE` statement). Every dispatcher edit of a case (summary, urgency, symptoms, possible causes, problem type) writes a `CASE_UPDATED` audit row with the old and new values in the same transaction as the edit.
+
 ## 8. Manager financial summary
 
 Simple aggregation over `job_costs`, no reporting table: confirmed revenue by period (`payment_status = CONFIRMED`, by `payment_confirmed_at`); revenue by equipment category (join assignments, requests, equipment, equipment types); counts and totals of `PENDING`, `INVOICE_SUBMITTED`, and `DISPUTED` payments.
@@ -251,6 +255,7 @@ Simple aggregation over `job_costs`, no reporting table: confirmed revenue by pe
 | Version | Decision |
 | --- | --- |
 | v2 | Single `init` migration; 33 tables; enum types in snake_case; `timestamptz`; actor foreign keys. |
+| v4.3 | Audit action `CASE_UPDATED` for dispatcher case edits. An external technician may also be used for URGENT requests (not only EMERGENCY). |
 | Oct 2026 (backend review) | Ranking follows the backend plan: availability `1 - open / 3` with `PENDING` counted and a 3-job cap, neutral feedback 0.6 below 3 reviews, exclusion of a technician who rejected the case. An emergency case may be approved straight from `NEW`. No schema change. |
 | v4.2 | Audit actions `USER_ROLE_CHANGED`, `ACCOUNT_ACTIVATED`, `ATTACHMENT_DELETED`; unique index on `users.activation_token_hash`. |
 | v4.1 | Invite-only staff activation columns on `users`; customer-confirmed case summary columns; `CASE_CONFIRMED_BY_CUSTOMER` audit action. Commission rates are percentages everywhere. |

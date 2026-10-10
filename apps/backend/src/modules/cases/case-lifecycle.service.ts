@@ -70,14 +70,34 @@ export class CaseLifecycleService {
    * Marks the request as a safety escalation (set once, never cleared). Returns false when it was already
    * escalated, so callers only notify dispatchers the first time.
    */
-  async escalate(tx: Db, requestId: string, actorId: string, reason: string): Promise<boolean> {
-    const result = await tx.maintenanceRequest.updateMany({
+  async escalate(
+    tx: Db,
+    requestId: string,
+    actorId: string,
+    reason: string,
+    options: { raisePriority?: boolean } = {},
+  ): Promise<boolean> {
+    const flagged = await tx.maintenanceRequest.updateMany({
       where: { id: requestId, is_safety_escalated: false },
       data: { is_safety_escalated: true, escalated_at: new Date(), escalation_reason: reason },
     });
-    if (result.count !== 1) return false;
+    // The customer's own confirmation of a danger (POST /requests/:id/safety-confirm) also makes the case an EMERGENCY.
+    // Other callers keep the priority they had.
+    const raised = options.raisePriority
+      ? await tx.maintenanceRequest.updateMany({
+          where: { id: requestId, priority: { not: RequestPriority.EMERGENCY } },
+          data: { priority: RequestPriority.EMERGENCY },
+        })
+      : { count: 0 };
+    if (flagged.count !== 1 && raised.count !== 1) return false;
     await this.audit.log(
-      { actorId, action: AuditAction.SAFETY_ESCALATED, entityType: 'maintenance_request', entityId: requestId, newValue: { reason } },
+      {
+        actorId,
+        action: AuditAction.SAFETY_ESCALATED,
+        entityType: 'maintenance_request',
+        entityId: requestId,
+        newValue: { reason, ...(raised.count === 1 ? { priority: RequestPriority.EMERGENCY } : {}) },
+      },
       tx,
     );
     return true;

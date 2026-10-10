@@ -38,14 +38,14 @@ function setup() {
   };
   const prisma = {
     skill: { count: jest.fn().mockResolvedValue(2), findMany: jest.fn() },
-    commissionTier: { findUnique: jest.fn() },
     technicianProfile: { findUnique: jest.fn() },
     technicianTierRequest: { findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn() },
     runInTransaction: jest.fn((fn: (t: unknown) => unknown) => fn(tx)),
   };
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
-  const service = new TechniciansService(prisma as never, audit as never);
-  return { service, prisma, tx, audit };
+  const tiers = { findByName: jest.fn(), findById: jest.fn() };
+  const service = new TechniciansService(prisma as never, audit as never, tiers as never);
+  return { service, prisma, tx, audit, tiers };
 }
 
 const uniqueError = (target: string[]) =>
@@ -158,10 +158,10 @@ describe('TechniciansService', () => {
     }
 
     it('approves: sets APPROVED, grants BRONZE by default, audits TECHNICIAN_APPROVED', async () => {
-      const { service, prisma, tx, audit } = setup();
+      const { service, prisma, tx, audit, tiers } = setup();
       stubGet(service);
       prisma.technicianTierRequest.findUnique.mockResolvedValue(pending);
-      prisma.commissionTier.findUnique.mockResolvedValue({ id: 'tier-bronze', name: 'BRONZE' });
+      tiers.findByName.mockResolvedValue({ id: 'tier-bronze', name: 'BRONZE' });
       tx.technicianTierRequest.updateMany.mockResolvedValue({ count: 1 });
       tx.technicianProfile.update.mockResolvedValue({
         id: 'p1',
@@ -172,7 +172,7 @@ describe('TechniciansService', () => {
 
       await service.decide('app1', manager, { decision: 'APPROVED', normal_rate: 28 });
 
-      expect(prisma.commissionTier.findUnique).toHaveBeenCalledWith({ where: { name: 'BRONZE' } });
+      expect(tiers.findByName).toHaveBeenCalledWith('BRONZE');
       expect(tx.technicianTierRequest.updateMany.mock.calls[0][0].data).toMatchObject({
         status: TierRequestStatus.APPROVED,
         final_tier_id: 'tier-bronze',
@@ -190,7 +190,7 @@ describe('TechniciansService', () => {
     });
 
     it('rejects: sets REJECTED, no tier, audits TECHNICIAN_REJECTED, keeps the reason', async () => {
-      const { service, prisma, tx, audit } = setup();
+      const { service, prisma, tx, audit, tiers } = setup();
       stubGet(service);
       prisma.technicianTierRequest.findUnique.mockResolvedValue(pending);
       tx.technicianTierRequest.updateMany.mockResolvedValue({ count: 1 });
@@ -203,7 +203,7 @@ describe('TechniciansService', () => {
 
       await service.decide('app1', manager, { decision: 'REJECTED', review_notes: 'Missing certificate' });
 
-      expect(prisma.commissionTier.findUnique).not.toHaveBeenCalled();
+      expect(tiers.findByName).not.toHaveBeenCalled();
       expect(tx.technicianTierRequest.updateMany.mock.calls[0][0].data).toMatchObject({
         status: TierRequestStatus.REJECTED,
         final_tier_id: null,
@@ -214,9 +214,9 @@ describe('TechniciansService', () => {
     });
 
     it('409s when the application was already decided', async () => {
-      const { service, prisma, tx } = setup();
+      const { service, prisma, tx, tiers } = setup();
       prisma.technicianTierRequest.findUnique.mockResolvedValue(pending);
-      prisma.commissionTier.findUnique.mockResolvedValue({ id: 'tier-bronze' });
+      tiers.findByName.mockResolvedValue({ id: 'tier-bronze' });
       tx.technicianTierRequest.updateMany.mockResolvedValue({ count: 0 });
       await expect(service.decide('app1', manager, { decision: 'APPROVED' })).rejects.toMatchObject({
         code: 'ALREADY_DECIDED',
@@ -235,9 +235,9 @@ describe('TechniciansService', () => {
     });
 
     it('fails when the commission tier is not configured', async () => {
-      const { service, prisma } = setup();
+      const { service, prisma, tiers } = setup();
       prisma.technicianTierRequest.findUnique.mockResolvedValue(pending);
-      prisma.commissionTier.findUnique.mockResolvedValue(null);
+      tiers.findByName.mockResolvedValue(null);
       await expect(service.decide('app1', manager, { decision: 'APPROVED' })).rejects.toMatchObject({
         code: 'TIER_NOT_CONFIGURED',
       });

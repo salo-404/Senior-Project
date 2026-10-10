@@ -156,15 +156,22 @@ export class AssignmentsService {
     return this.getOne(created.assignment.id);
   }
 
-  /** EMERGENCY only, and only when no internal technician is free. The dispatcher arranged it by phone. */
+  /**
+   * URGENT or EMERGENCY, and only when no internal technician is eligible. The dispatcher arranged it by phone.
+   * NOTE(plan-alignment): URGENT was added to match backend plan section 7.2; a NORMAL case is still refused.
+   */
   async assignExternal(dispatcher: AuthenticatedUser, requestId: string, dto: CreateExternalAssignmentDto) {
     this.assertSchedule(dto.scheduled_at);
 
     const created = await this.prisma.runInTransaction(async (tx) => {
       const request = await this.loadRequest(tx, requestId);
       this.assertApproved(request);
-      if (request.priority !== RequestPriority.EMERGENCY) {
-        throw new AppException('EXTERNAL_ONLY_FOR_EMERGENCY', 'An external technician can be used only for an emergency', 409);
+      if (request.priority !== RequestPriority.EMERGENCY && request.priority !== RequestPriority.URGENT) {
+        throw new AppException(
+          'EXTERNAL_NOT_ALLOWED',
+          'An external technician can be used only for an urgent or an emergency case',
+          409,
+        );
       }
       const ranking = await this.rank(tx, request);
       // NOTE(plan-alignment): "available" now means eligible. Technicians at the 3-job limit, unavailable,
@@ -240,6 +247,17 @@ export class AssignmentsService {
       this.prisma.assignment.count({ where }),
     ]);
     return paginated(rows, query.page, query.pageSize, total);
+  }
+
+  /** For the technicians module (tier suggestions): COMPLETED assignments per technician profile. */
+  async countCompleted(technicianProfileIds: string[]): Promise<Map<string, number>> {
+    if (technicianProfileIds.length === 0) return new Map();
+    const groups = await this.prisma.assignment.groupBy({
+      by: ['technician_profile_id'],
+      where: { technician_profile_id: { in: technicianProfileIds }, status: AssignmentStatus.COMPLETED },
+      _count: { _all: true },
+    });
+    return new Map(groups.flatMap((g) => (g.technician_profile_id ? [[g.technician_profile_id, g._count._all] as [string, number]] : [])));
   }
 
   getOne(id: string) {
