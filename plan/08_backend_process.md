@@ -90,6 +90,8 @@ Only an `APPROVED` case can be ranked or assigned. The ranking is computed by pl
 
 Only technicians with `profile_status = APPROVED` are considered; applicants never appear.
 
+Two dispatchers assigning different cases to the same technician at once are serialized by a row lock on the technician profile (`lockTechnician` in `assignments.service.ts`, taken before the ranking), so the 3-job limit cannot be passed. Anything that adds or reopens a counted assignment must take the same lock.
+
 **Score** (each factor 0 to 1, weighted, times 100):
 
 | Factor | Value | Normal | Emergency |
@@ -142,7 +144,7 @@ How e2e isolation works, and why:
 - Every e2e file except the smoke test runs with `AI_ENABLED=false`, no Redis and no object storage, so the manual path is proven to work without them.
 - `test/infra-smoke.e2e-spec.ts` talks to the real Docker Redis and object storage. `test/global-setup.ts` checks first whether they are reachable and prints a message; when one is not, its smoke test is skipped, never failed.
 
-Expected result: 409 unit tests and 97 e2e tests pass (2 of the e2e tests are skipped when Redis or storage is not running).
+Expected result: 409 unit tests and 99 e2e tests pass (with Redis and storage running none are skipped; without them the 2 smoke tests skip with a message).
 
 ## 9. Changes made when Stage 2 and 3 were reviewed against the plan
 

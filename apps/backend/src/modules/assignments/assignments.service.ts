@@ -82,6 +82,10 @@ export class AssignmentsService {
     this.assertSchedule(dto.scheduled_at);
 
     const created = await this.prisma.runInTransaction(async (tx) => {
+      // Two dispatchers can assign DIFFERENT cases to the same technician at the same moment. Without this lock both
+      // would count the same open jobs and both insert, passing the 3-job limit. The second waits here until the first
+      // commits, then its ranking below sees the new count.
+      await this.lockTechnician(tx, dto.technician_profile_id);
       const request = await this.loadRequest(tx, requestId);
       this.assertApproved(request);
       const ranking = await this.rank(tx, request);
@@ -265,6 +269,11 @@ export class AssignmentsService {
   }
 
   // ---------------------------------------------------------------- helpers
+
+  /** Row lock on the technician profile until the transaction ends; a no-op for an id that does not exist. */
+  private async lockTechnician(tx: Prisma.TransactionClient, technicianProfileId: string): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM technician_profiles WHERE id = ${technicianProfileId} FOR UPDATE`;
+  }
 
   private async loadRequest(db: Db, requestId: string): Promise<RankingRequestRow> {
     const request = await db.maintenanceRequest.findUnique({ where: { id: requestId }, select: REQUEST_FOR_RANKING });

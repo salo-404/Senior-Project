@@ -125,3 +125,12 @@ Finishes the Week 2 items that were still open: the customer's summary, the rema
 | External technician | Now allowed for URGENT as well as EMERGENCY cases (backend plan 7.2), still only when no internal technician is eligible. A NORMAL case is refused with `EXTERNAL_NOT_ALLOWED` (this code replaces `EXTERNAL_ONLY_FOR_EMERGENCY`). |
 | Case edits | Every dispatcher edit is audited as `CASE_UPDATED` with the old and new values, in the same transaction, before any escalation, so a failure afterwards rolls back both. |
 | Smoke tests | `test/infra-smoke.e2e-spec.ts` runs against the Docker Redis and object storage (`docker compose up -d redis storage`): an image upload round trip (upload, signed link, other customer gets 404, delete) and `enqueueCaseDraft` really enqueuing a job that waits in the queue. Each is skipped with a message when its service is not running; it never fails for that reason. |
+
+## Week 3 closing fix: technician row lock
+
+| Topic | Decision |
+| --- | --- |
+| Problem | Two dispatchers assigning different cases to the same technician at the same moment both counted the same open jobs and both inserted, so a technician could pass the 3-open-job limit (reproduced: 4 open jobs). |
+| Fix | `AssignmentsService.assign` takes a row lock on the chosen technician profile (`SELECT ... FOR UPDATE`) before it ranks. The second request waits for the first to commit, then its ranking sees the new count and returns `NOT_ELIGIBLE` (`TOO_MANY_ACTIVE_JOBS`). No migration. |
+| Rule for later stages | Any code that adds or reopens a counted assignment (PENDING, ACCEPTED, IN_PROGRESS) for a technician, such as Stage 4 reject-and-reassign, must take the same lock first. |
+| Tests | Two different cases assigned at once to a technician with 2 open jobs gives one 201 and one 409; a forced failure inside the assign transaction leaves no assignment, no status change and no notification. |

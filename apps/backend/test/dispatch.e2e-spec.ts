@@ -13,6 +13,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
 import { hashPassword } from '../src/common/password';
+import { AuditService } from '../src/infra/audit/audit.service';
 import { PrismaService } from '../src/infra/prisma/prisma.service';
 
 const API = '/api/v1';
@@ -311,6 +312,55 @@ describe('Stage 3: dispatch, ranking and assignment (e2e, throwaway database)', 
 
       const again = await assign(id, { technician_profile_id: profileIds.star }).expect(409);
       expect(again.body.error.code).toBe('NOT_APPROVED');
+    });
+
+    it('never gives a technician more than 3 open assignments when two dispatchers assign different cases at once', async () => {
+      // bring a technician to exactly 2 open assignments, then race two different cases at them
+      const made: string[] = [];
+      while ((await openJobs(profileIds.mid)) < 2) {
+        const caseId = await approvedCase();
+        made.push((await assign(caseId, { technician_profile_id: profileIds.mid }).expect(201)).body.id);
+      }
+      try {
+        expect(await openJobs(profileIds.mid)).toBe(2);
+        const [caseA, caseB] = [await approvedCase(), await approvedCase()];
+        const results = await Promise.all([
+          assign(caseA, { technician_profile_id: profileIds.mid }),
+          assign(caseB, { technician_profile_id: profileIds.mid }),
+        ]);
+        expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+        expect(results.find((r) => r.status === 409)!.body.error).toMatchObject({
+          code: 'NOT_ELIGIBLE',
+          details: { reasons: ['TOO_MANY_ACTIVE_JOBS'] },
+        });
+        expect(await openJobs(profileIds.mid)).toBe(3);
+        for (const r of results) if (r.status === 201) made.push(r.body.id);
+      } finally {
+        await release(made);
+      }
+    });
+
+    it('leaves nothing behind when a step inside the assign transaction fails, and sends no notification', async () => {
+      const id = await approvedCase();
+      const audit = app.get(AuditService);
+      const original = audit.log.bind(audit);
+      const spy = jest.spyOn(audit, 'log').mockImplementation(((entry: { action: AuditAction }, tx?: never) => {
+        if (entry.action === AuditAction.ASSIGNMENT_CREATED) return Promise.reject(new Error('forced failure'));
+        return original(entry as never, tx);
+      }) as never);
+      const statusRows = await prisma.requestStatusHistory.count({ where: { request_id: id } });
+      try {
+        await assign(id, { technician_profile_id: profileIds.star }).expect(500);
+      } finally {
+        spy.mockRestore();
+      }
+      expect((await prisma.maintenanceRequest.findUniqueOrThrow({ where: { id } })).status).toBe(RequestStatus.APPROVED);
+      expect(await prisma.assignment.count({ where: { request_id: id } })).toBe(0);
+      expect(await prisma.requestStatusHistory.count({ where: { request_id: id } })).toBe(statusRows);
+      expect(await prisma.notification.count({ where: { request_id: id, notification_type: NotificationType.ASSIGNMENT_CREATED } })).toBe(0);
+      // and the case can still be assigned afterwards
+      const retry = await assign(id, { technician_profile_id: profileIds.star }).expect(201);
+      await release([retry.body.id]);
     });
 
     it('lowers availability by a third for every open assignment, PENDING ones included', async () => {
